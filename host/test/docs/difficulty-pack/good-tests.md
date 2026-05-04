@@ -1,24 +1,27 @@
 # Sprint 1.21 — Good tests from the difficulty pack
 
-**As of:** 2026-05-04 (post-c20 twelve-file-refactor v3 t16/t32 sniff)
+**As of:** 2026-05-04 (post-c21 N=3 confirmatory sweep, t16 + t64)
 **Branch:** feature/harder-test-suite-1
 
-These are the cells that earned a place in the suite — each one carries a real, evidence-backed signal across the model lineage we run.
+Five-cell corpus after the c21 N=3 haircut. Earlier single-rep evidence has been re-graded against the wider sample. Claims are **softer than c20's writeup** — variance at small N is real and several cells flipped between reps. Promotions and demotions called out per cell.
 
-| # | cell | what it gives us | evidence |
-|---|---|---|---|
-| 1 | `book-store` | tier discriminator (R9-A) | c3: t16 0/3, t32 2/3 — t16 floors, t32 hits the middle band. Clean signal; one fresh-image re-confirm pending |
-| 2 | `two-bucket` | tier discriminator | c3+c4: t16 0-1/3, t32 3/3. Robust across two independent cycles — the strongest cell in the pack |
-| 3 | `wordy` | Tier-D context-floor marker | c3+c4: both tiers floor (R9-B). Not a gate cell — but a load-bearing frontier-reserve probe: tells us when a model can't even start a multi-clause arithmetic-parse task |
-| 4 | `needle-haystack` | candidate tier discriminator (R9-A) — v4 ambiguous-candidate disambiguation | v1/v2/v3 all saturated at t16 in 8-25s via grep+inline. v4 (4-each candidates with single self-consistent triple) hit clean t16 ctx-overflow at c11 (14 iters, 39.7k tokens > 32k ctx) — exactly the manifest's R9-A trigger. t64 confirmation pending: c12 t64 dispatch was invalidated by a harness-side `grep_search` leak into `.claw-runtime/` (filed: usability-pack U1) |
-| 5 | `word-search` | provisional tier discriminator (debug-capacity class) — v2.1 dual-anchor + array | v1 saturated at t16 in 8 iters via greedy per-direction match. v2 (single anchor, multi-file) still saturated at 7 iters (c14). v2.1 (dual prefix+suffix anchors, array return, sort-by-row-major) flipped the signal: t16 0/2 (c15 13 iters error, c17 18 iters error — debug loop crashes in own `node -e` bounds checks); t32 1/1 (c16 10 iters, 3 write attempts, 3rd passed). N=3 confirmatory sweeps deferred. Failure mode is *iter-storm + claw error*, not ctx-overflow — distinct class from R9-A but same tier-step shape |
-| 6 | `twelve-file-refactor` | provisional tier discriminator (debug-capacity class) — v3 split-config + per-currency fractions | v1 saturated at t16 18 iters (c1/c2 100%); cycle-3 stricter spec (multi-thousands + negatives) didn't help. v2 cycle-18 (kill literal expected strings, move locale rules to format-config.js, ship strict parsePrice in format-parse.js, verifier asserts parse(format(x,c,l), l) round-trips) STILL saturated t16 20 iters — model read config and wrote a config-driven formatter in one shot. v3 cycle-19 (split fraction-digit count into separate currency-config.js: USD/EUR/GBP=2, JPY/KRW=0, BHD/KWD=3; two-step parse: peel currency at locale's known position, look up CURRENCIES[ccy].fractionDigits, then build amount regex; tests now exercise JPY 0-decimals + BHD 3-decimals + KRW thousands-grouped-no-decimal) flipped the signal: t16 0/1 c19 21 iters error (debug loop: 4 format.js rewrites cycling through `cart en: parsePrice rejected "015.50 GBP"` → `"15.50 GBP"` (currency suffix instead of prefix for en) → `"99.00 EUR"` (period decimal instead of comma for de) → never converges); t32 1/1 c20 21 iters clean. N=3 confirmatory sweeps deferred. Failure mode = iter-storm + claw error (same class as word-search v2.1, distinct from R9-A ctx-overflow). |
+| # | cell | what it gives us | c21 N=3 evidence (t16 / t64) | claim |
+|---|---|---|---|---|
+| 1 | `book-store` | strongest tier discriminator in the corpus | **0/3 / 2/3** — clean t16 floor with reasonable t64 ceiling (1 t64 fail at 55s, normal-shape) | promoted: clean tier discriminator |
+| 2 | `wordy` | clean monotonic tier discriminator | **1/3 / 3/3** — t16 floors hard, t64 perfect | clean tier discriminator |
+| 3 | `twelve-file-refactor` v3 | weak monotonic discriminator (debug-capacity class) — split-config + per-currency fractions | **2/3 / 3/3** — single t16 fail showed iter-storm cycling 4 format.js rewrites (c19 evidence still load-bearing); t64 perfect | weak monotonic; lineage notes carry the saturation-defeat story (c1/c2 saturated v1; c18 v2 saturated; c19 v3 split fraction-digit count into currency-config.js with JPY/KRW=0, BHD/KWD=3; defeat = iter-storm + claw error at t16) |
+| 4 | `word-search` v2.1 | weak monotonic discriminator (debug-capacity class) — dual prefix+suffix anchors, array return | **2/3 / 3/3** — single t16 fail was the c21 76-min SSE deadlock, not difficulty (filed: usability-pack [bridge-sse-deadlock.md](../usability-pack/memos/bridge-sse-deadlock.md)). True t16 difficulty signal is closer to 1/3, possibly tighter once the SSE deadlock is fixed | weak monotonic; rerun once runtime stabilizes |
+| 5 | `two-bucket` | softest cell — flat across tiers under N=3 | **2/3 / 2/3** — c21 saw one t64 timeout (285s claw-timeout, normal path); single-rep priors (c3+c4 t16 0-1/3, t32 3/3) didn't replicate. Claim is "weak signal, possibly variance-only" until a wider-N rerun lands | downgraded: candidate tier-sensitivity probe pending wider-N evidence |
+
+## Moved to usability — tooling probe
+
+`needle-haystack` v4. Authored as a t16 ctx-overflow (R9-A) probe on c11 single-rep evidence. c21 N=3 sweep showed it **inverts** — t16 2/3, t64 0/2 with one fast 8.6s error and one 21-minute SSE deadlock (and one missing registry row entirely). A test that fails worse at the higher tier is not a model-capability signal; it is surfacing t64 runtime instability. Test file relocated to [__tests__/tier-eval/frontier/needle-haystack.test.js](../../__tests__/tier-eval/frontier/needle-haystack.test.js); dropped from `explore-cycle.sh` `NEW_TESTS` allowlist; full evidence + suggested audits in [needle-haystack-t64-inversion.md](../usability-pack/memos/needle-haystack-t64-inversion.md). May re-enter the pack on a future t64 plist that doesn't show the inversion.
 
 ## Set aside — under redesign review
 
-`ini-parser`, `needle-haystack-v1`. Each saturates cleanly across the lineage but has a defeasible saturation strategy worth a v2 redesign attempt (see triage 2026-05-03):
+`ini-parser`. Saturates cleanly across the lineage but has a defeasible saturation strategy worth a v2 redesign attempt (see triage 2026-05-03):
 
-- `ini-parser` (~5/noisy/4): true saturation low; t32 number is bridge SSE noise (1250s→13s collapse), not difficulty. Defeat path: schema-validation requiring multi-pass / backtracking. Re-confirm noise hypothesis before redesigning.
+- `ini-parser` (~5/noisy/4): true saturation low; t32 number is suspected bridge SSE noise (1250s→13s collapse), now backed by the c21 [bridge-sse-deadlock.md](../usability-pack/memos/bridge-sse-deadlock.md) finding. Defeat path: schema-validation requiring multi-pass / backtracking. Re-confirm noise hypothesis once the SSE deadlock is resolved before redesigning.
 
 ## Removed (structural — no defeat path)
 

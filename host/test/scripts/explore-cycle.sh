@@ -52,16 +52,17 @@ TEST_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 DOCS_DIR="$TEST_DIR/docs/difficulty-pack"
 EXPLORE_DIR="$DOCS_DIR/explore/c${CYCLE}"
 
-# Active difficulty-pack tests after Sprint 1.21 cycle 2. Three tests
-# (alphametics, forth, semver-range) were relocated to
-# __tests__/tier-eval/frontier/ as floor/frontier reserves and are no longer
-# part of the screening filter. Order matches 1.21-handsolve-log.md table.
-# Cycle 4 added needle-haystack (H5, multi_file_context+retrieval_over_distance)
-# as a NIAH-style test targeting the t16 ctx-pressure axis surfaced by R9-A.
+# Active difficulty-pack tests after Sprint 1.21 cycle 21. Four tests
+# (alphametics, forth, semver-range, needle-haystack) live under
+# __tests__/tier-eval/frontier/ and are not part of the screening filter:
+# the first three as floor/frontier reserves, needle-haystack because the
+# c21 N=3 sweep showed it surfaces t64 runtime instability (1 fast error,
+# 1 21-min SSE deadlock, 1 missing-row) rather than model capability —
+# tracked as a tooling probe in usability-pack/memos/. Order matches
+# 1.21-handsolve-log.md table.
 NEW_TESTS=(
   wordy book-store word-search two-bucket
   twelve-file-refactor ini-parser
-  needle-haystack
 )
 
 # Honor a caller-supplied TIER_EVAL_FILTER (e.g. when re-sampling a subset or
