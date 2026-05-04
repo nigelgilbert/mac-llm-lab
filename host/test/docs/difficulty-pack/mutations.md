@@ -146,8 +146,9 @@ revert in the PR.
 **Gate fired (Sprint 1.21 cycle 1+2 pilot, 2026-05-02):** alphametics
 floored 0/3 t32 + 0/2 t16 — `*` extension dropped per gate. Test now
 addition-only; rename, bidirectional `=`, and `[{symbol,code}]` return
-shape retained. See `explore/c2/snapshots/alphametics.t16.jsonl` for the
-7-iteration confused-solver trace that triggered the revert.
+shape retained. The 7-iteration confused-solver trace that triggered
+the revert is in `explore/c2/snapshots/alphametics.t16.jsonl`
+(gitignored; regenerable from the c2 registry JSONL).
 
 ---
 
