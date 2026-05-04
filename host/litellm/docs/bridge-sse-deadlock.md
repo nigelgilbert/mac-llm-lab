@@ -64,7 +64,7 @@ iter 5's HTTP/SSE response from `llama-server` (via the LiteLLM bridge) deadlock
 6. The configured `timeoutMs=285000` in claw's runClaw watchdog *does not unblock the read* — most likely it sends SIGTERM and `await`s child-exit, but the child is stuck in a syscall that ignores SIGTERM (or the watchdog is only an outer Promise race that doesn't kill the stuck HTTP request).
 7. ~76 minutes later, some upper-layer mechanism (TCP idle, OS-level half-close detection, docker compose run, or node:test's outermost `{ timeout: CLAW_TIMEOUT + 20_000 }` finally cascading once the underlying HTTP errors out) closes the connection. claw exits, the harness records `terminal_status: timeout` after the fact.
 
-This is consistent with the c3 `ini-parser` "1250s → 13s collapse" observation already documented in [good-tests.md](../../difficulty-pack/good-tests.md): the same bridge-SSE-instability class can produce wildly variable wallclock under apparently stable model conditions.
+This is consistent with the c3 `ini-parser` "1250s → 13s collapse" observation already documented in [good-tests.md](../../test/docs/difficulty-pack/good-tests.md): the same bridge-SSE-instability class can produce wildly variable wallclock under apparently stable model conditions.
 
 ## Why this matters
 
@@ -92,6 +92,7 @@ This is consistent with the c3 `ini-parser` "1250s → 13s collapse" observation
 
 ## Related
 
-- [good-tests.md](../../difficulty-pack/good-tests.md) — `ini-parser` entry under "Set aside — under redesign review" notes a similar 1250s→13s SSE-noise collapse from c3. Same suspected class.
-- [grep-search-claw-runtime-leak.md](grep-search-claw-runtime-leak.md) — sibling usability finding (U1) from the same sweep arc.
+- [good-tests.md](../../test/docs/difficulty-pack/good-tests.md) — `ini-parser` entry under "Set aside — under redesign review" notes a similar 1250s→13s SSE-noise collapse from c3. Same suspected class.
+- [grep-search-claw-runtime-leak.md](../../test/docs/usability-pack/memos/grep-search-claw-runtime-leak.md) — sibling usability finding (U1) from the same sweep arc.
+- [TODO-1.21-bridge-error-diagnostics.md](TODO-1.21-bridge-error-diagnostics.md) — sibling bridge anomalies (orphan_transcript_record, stream_aborted_mid_run, spurious-500) filed alongside this one.
 - The Sprint 1.21 c21-follow-up `entrypoint.sh` change (commit `51d4cf6`) is a *guard*, not a fix; this issue remains open as the underlying cause.

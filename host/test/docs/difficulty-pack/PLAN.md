@@ -143,7 +143,7 @@ Direction-agnostic: works whether t16 is the ctx-bound side (the expected case f
 
 **Transient filter (mandatory before R9 fires):**
 
-R9 distinguishes legitimate `ctx_overflow_400` (real model behavior — claw stderr shows `request (NNNNN tokens) > NNNNN ctx`) from bridge `stream_aborted_mid_run+count_mismatch` (the bridge dropped the SSE stream, claw eventually timed out from above, model never had a fair chance — see [`../../../litellm/TODO-1.21-bridge-error-diagnostics.md`](../../../litellm/TODO-1.21-bridge-error-diagnostics.md) anomaly #2). Filter out the latter as transient noise BEFORE counting toward R9-A or R9-B. At Sprint 2 confirmatory N=60, the ~5–8% bridge-transient rate would otherwise inflate the ctx_overflow_400 count and could mislabel a cell.
+R9 distinguishes legitimate `ctx_overflow_400` (real model behavior — claw stderr shows `request (NNNNN tokens) > NNNNN ctx`) from bridge `stream_aborted_mid_run+count_mismatch` (the bridge dropped the SSE stream, claw eventually timed out from above, model never had a fair chance — see [`../../../litellm/docs/TODO-1.21-bridge-error-diagnostics.md`](../../../litellm/docs/TODO-1.21-bridge-error-diagnostics.md) anomaly #2). Filter out the latter as transient noise BEFORE counting toward R9-A or R9-B. At Sprint 2 confirmatory N=60, the ~5–8% bridge-transient rate would otherwise inflate the ctx_overflow_400 count and could mislabel a cell.
 
 **Verification gate count = (pass-rate keep-band cells) ∪ (R9-A cells), targeting ≥6.**
 
@@ -265,7 +265,7 @@ Budget: 4 × ~3.5h = 14h.
 ### Two changes considered, both DEFERRED to 1.22/1.23
 
 - `lib/workspace.js` `loadFixture(dir)` helper — defer. Existing inline pattern works; helper is scope creep for 1.21 and triggers a `docker compose build test` cycle. Fixture *content* should remain inline regardless (license/contamination posture).
-- `lib/standardTest.js` control-flow helper — defer. Would extract the duplicated `workspace.reset` → seed-write → `runClaw` → post-script → `writeAssertionResult` → timeout-guard → assert sequence. Real technical debt (Sprints 1.10 and 1.16a both required mechanical sweeps across 20–32 files), but landing it during 1.21 risks helper API churn during authoring and adds a container rebuild to the critical path. Logged as a 1.22/1.23 follow-up; design rationale captured in [`memos/standardtest-helper.md`](memos/standardtest-helper.md).
+- `lib/standardTest.js` control-flow helper — defer. Would extract the duplicated `workspace.reset` → seed-write → `runClaw` → post-script → `writeAssertionResult` → timeout-guard → assert sequence. Real technical debt (Sprints 1.10 and 1.16a both required mechanical sweeps across 20–32 files), but landing it during 1.21 risks helper API churn during authoring and adds a container rebuild to the critical path. Logged as a 1.22/1.23 follow-up; design rationale captured in [`../base/standardtest-helper.md`](../base/standardtest-helper.md).
 
 ### Authoring template (canonical pattern)
 

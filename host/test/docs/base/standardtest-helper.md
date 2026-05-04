@@ -21,5 +21,5 @@ inline per test, not in a shared `fixtures/` directory — license posture
 on Aider/Exercism-derived seeds, plus self-containment.
 
 Status tracked in
-[`TIER-EVAL-V2-SPRINT-PLAN.md`](../../base/TIER-EVAL-V2-SPRINT-PLAN.md)
+[`TIER-EVAL-V2-SPRINT-PLAN.md`](TIER-EVAL-V2-SPRINT-PLAN.md)
 row 1.22.

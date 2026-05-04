@@ -75,4 +75,4 @@ sed -n '10p' host/test/.claw-runtime/$RUN/sessions/*/session-*.jsonl \
 - Run that surfaced it: `c12-20260503-1722` — `host/test/.claw-runtime/702434a3-d576-4429-99d2-7fa68ec8b1d6/`
 - Companion legitimate ctx-overflow (different tool path, same v4 spec): `c11-20260503-1712` — `host/test/.claw-runtime/e30a2323-e865-414d-b8e5-5be63b39bcd7/`
 - Difficulty-pack v4 needle-haystack spec: `host/test/__tests__/tier-eval/needle-haystack.test.js`
-- Bridge-diagnostics sibling stream (filed for ini-parser t32 sampler pathology, similar "looks-like-difficulty-but-isn't" pattern): see [`../../../litellm/TODO-1.21-bridge-error-diagnostics.md`](../../../../litellm/TODO-1.21-bridge-error-diagnostics.md)
+- Bridge-diagnostics sibling stream (filed for ini-parser t32 sampler pathology, similar "looks-like-difficulty-but-isn't" pattern): see [`../../../../litellm/docs/TODO-1.21-bridge-error-diagnostics.md`](../../../../litellm/docs/TODO-1.21-bridge-error-diagnostics.md)

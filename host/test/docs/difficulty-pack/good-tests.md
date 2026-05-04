@@ -10,7 +10,7 @@ Five-cell corpus after the c21 N=3 haircut. Earlier single-rep evidence has been
 | 1 | `book-store` | strongest tier discriminator in the corpus | **0/3 / 2/3** — clean t16 floor with reasonable t64 ceiling (1 t64 fail at 55s, normal-shape) | promoted: clean tier discriminator |
 | 2 | `wordy` | clean monotonic tier discriminator | **1/3 / 3/3** — t16 floors hard, t64 perfect | clean tier discriminator |
 | 3 | `twelve-file-refactor` v3 | weak monotonic discriminator (debug-capacity class) — split-config + per-currency fractions | **2/3 / 3/3** — single t16 fail showed iter-storm cycling 4 format.js rewrites (c19 evidence still load-bearing); t64 perfect | weak monotonic; lineage notes carry the saturation-defeat story (c1/c2 saturated v1; c18 v2 saturated; c19 v3 split fraction-digit count into currency-config.js with JPY/KRW=0, BHD/KWD=3; defeat = iter-storm + claw error at t16) |
-| 4 | `word-search` v2.1 | weak monotonic discriminator (debug-capacity class) — dual prefix+suffix anchors, array return | **2/3 / 3/3** — single t16 fail was the c21 76-min SSE deadlock, not difficulty (filed: usability-pack [bridge-sse-deadlock.md](../usability-pack/memos/bridge-sse-deadlock.md)). True t16 difficulty signal is closer to 1/3, possibly tighter once the SSE deadlock is fixed | weak monotonic; rerun once runtime stabilizes |
+| 4 | `word-search` v2.1 | weak monotonic discriminator (debug-capacity class) — dual prefix+suffix anchors, array return | **2/3 / 3/3** — single t16 fail was the c21 76-min SSE deadlock, not difficulty (filed: [`bridge-sse-deadlock.md`](../../../litellm/docs/bridge-sse-deadlock.md)). True t16 difficulty signal is closer to 1/3, possibly tighter once the SSE deadlock is fixed | weak monotonic; rerun once runtime stabilizes |
 | 5 | `two-bucket` | softest cell — flat across tiers under N=3 | **2/3 / 2/3** — c21 saw one t64 timeout (285s claw-timeout, normal path); single-rep priors (c3+c4 t16 0-1/3, t32 3/3) didn't replicate. Claim is "weak signal, possibly variance-only" until a wider-N rerun lands | downgraded: candidate tier-sensitivity probe pending wider-N evidence |
 
 ## Moved to usability — tooling probe
@@ -21,7 +21,7 @@ Five-cell corpus after the c21 N=3 haircut. Earlier single-rep evidence has been
 
 `ini-parser`. Saturates cleanly across the lineage but has a defeasible saturation strategy worth a v2 redesign attempt (see triage 2026-05-03):
 
-- `ini-parser` (~5/noisy/4): true saturation low; t32 number is suspected bridge SSE noise (1250s→13s collapse), now backed by the c21 [bridge-sse-deadlock.md](../usability-pack/memos/bridge-sse-deadlock.md) finding. Defeat path: schema-validation requiring multi-pass / backtracking. Re-confirm noise hypothesis once the SSE deadlock is resolved before redesigning.
+- `ini-parser` (~5/noisy/4): true saturation low; t32 number is suspected bridge SSE noise (1250s→13s collapse), now backed by the c21 [bridge-sse-deadlock.md](../../../litellm/docs/bridge-sse-deadlock.md) finding. Defeat path: schema-validation requiring multi-pass / backtracking. Re-confirm noise hypothesis once the SSE deadlock is resolved before redesigning.
 
 ## Removed (structural — no defeat path)
 

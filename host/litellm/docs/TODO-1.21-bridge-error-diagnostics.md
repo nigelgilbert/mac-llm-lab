@@ -121,6 +121,7 @@ Orphan flag has been **silently 100% the whole time**; only noticed when it coin
 ## References
 
 - Sprint 1.21 plan: `host/test/docs/difficulty-pack/PLAN.md`
-- c3 summary: `host/test/docs/difficulty-pack/explore/c3/summary.md`
-- Bridge: `host/litellm/` (this dir), `host/test/lib/bridge.js` (claw-side client)
+- c3 summary: `host/test/docs/difficulty-pack/explore/c3/summary.md` (gitignored; regenerable from the c3 registry JSONL)
+- Bridge code: `host/litellm/` (parent of this dir), `host/test/lib/bridge.js` (claw-side client)
 - Snapshot tooling: `host/test/scripts/explore-summarize.mjs`
+- Sibling bridge memo (SSE deadlock witness): [`bridge-sse-deadlock.md`](bridge-sse-deadlock.md)

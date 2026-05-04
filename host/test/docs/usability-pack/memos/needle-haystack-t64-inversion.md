@@ -27,7 +27,7 @@ This cell has been moved out of the difficulty-pack into `__tests__/tier-eval/fr
 | `52cffe27-ddb5-4135-8085-fac4b9a8fe1b` | 16 | 2 | error   | false | 14 | 204 869  | normal-shape failure |
 | `7ab77f12-9884-490e-b8cb-d917ad788783` | 16 | 3 | done    | true  | 12 | 51 553   | normal pass |
 | `9809dfab-fe87-48c1-867b-8445658d8e91` | 64 | 1 | error   | false | 3  | **8 613** | 8.6 s end-to-end — model never engaged with the task |
-| `7e33fba9-1df6-46fb-a8a3-924dd5627d4c` | 64 | 2 | timeout | false | 4  | **1 246 691** | 21 min wall — same shape as the SSE-deadlock memo from c21 (`bridge-sse-deadlock.md`); CLAW_TIMEOUT=285s did not enforce |
+| `7e33fba9-1df6-46fb-a8a3-924dd5627d4c` | 64 | 2 | timeout | false | 4  | **1 246 691** | 21 min wall — same shape as the SSE-deadlock memo from c21 (`../../../../litellm/docs/bridge-sse-deadlock.md`); CLAW_TIMEOUT=285s did not enforce |
 | (rep 3 t64) | 64 | 3 | — | — | — | — | **no registry row written** — harness lost it |
 
 ### Pattern
@@ -35,7 +35,7 @@ This cell has been moved out of the difficulty-pack into `__tests__/tier-eval/fr
 - **t16:** mean ~112 s wall, 12-17 iters per run, conventional pass/fail distribution. Indistinguishable from a normal difficulty-pack cell.
 - **t64:** ~8 s ↔ 21 min bimodal. Three reps, three different infra failure modes (fast error, SSE deadlock, missing row). Zero of three look like the model worked the problem.
 
-The t64 pattern matches the same SSE-deadlock class documented in [bridge-sse-deadlock.md](bridge-sse-deadlock.md): the 21-min run almost certainly waited indefinitely on a streamed response that never completed. The 8.6s error suggests the t64 plist failed at request-routing or model-load on this specific workload (the cell's 30-file workspace produces a larger initial prompt than most other cells).
+The t64 pattern matches the same SSE-deadlock class documented in [bridge-sse-deadlock.md](../../../../litellm/docs/bridge-sse-deadlock.md): the 21-min run almost certainly waited indefinitely on a streamed response that never completed. The 8.6s error suggests the t64 plist failed at request-routing or model-load on this specific workload (the cell's 30-file workspace produces a larger initial prompt than most other cells).
 
 ## Why move to usability rather than redesign
 
@@ -53,7 +53,7 @@ A redesign would need to defeat a saturation strategy at the *model* level. The 
 
 ## Suggested next steps
 
-1. **When the bridge SSE deadlock and harness row-loss issues are resolved** (see [bridge-sse-deadlock.md](bridge-sse-deadlock.md)), re-run `needle-haystack` v4 at N=3 against both tiers under the fixed runtime. If t64 reliably passes ≥80% AND t16 still floors / errors at ≥66%, the cell can re-enter the difficulty-pack with the inversion explained as runtime artifact. Document the new evidence; do not just point at the old c11 single-rep result.
+1. **When the bridge SSE deadlock and harness row-loss issues are resolved** (see [bridge-sse-deadlock.md](../../../../litellm/docs/bridge-sse-deadlock.md)), re-run `needle-haystack` v4 at N=3 against both tiers under the fixed runtime. If t64 reliably passes ≥80% AND t16 still floors / errors at ≥66%, the cell can re-enter the difficulty-pack with the inversion explained as runtime artifact. Document the new evidence; do not just point at the old c11 single-rep result.
 2. **Independent of needle:** investigate why the t64 plist's 8.6 s error path exists at all. A model that aborts in 8.6 s on a 30-file workspace prompt either (a) isn't loaded yet, (b) has a routing bug for that workload size, or (c) is hitting some pre-flight check that fails. Whatever it is, it is invisible to operators today and will keep contaminating other long-prompt cells.
 3. **Telemetry.** When a sweep loses a registry row entirely (the t64 rep 3 case here), the harness should surface that — today the only way to notice is to count rows manually against `expected-attempts.csv`.
 
@@ -65,5 +65,5 @@ A redesign would need to defeat a saturation strategy at the *model* level. The 
 
 ## Related
 
-- [bridge-sse-deadlock.md](bridge-sse-deadlock.md) — same class of t16 / t64 stall observed on `word-search` v2.1 in the same sweep.
+- [bridge-sse-deadlock.md](../../../../litellm/docs/bridge-sse-deadlock.md) — same class of t16 / t64 stall observed on `word-search` v2.1 in the same sweep.
 - [grep-search-claw-runtime-leak.md](grep-search-claw-runtime-leak.md) — sibling usability-pack finding (U1).
