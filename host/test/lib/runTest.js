@@ -51,7 +51,7 @@ import { runClaw, writeAssertionResult } from './claw.js';
 import * as workspace from './workspace.js';
 import { clawModel, TIER_LABEL } from './tier.js';
 
-const POST_SCRIPT_TIMEOUT_MS = 10_000;
+const DEFAULT_POST_SCRIPT_TIMEOUT_MS = 5_000;
 const PRE_CONDITION_TIMEOUT_MS = 5_000;
 const AGENT_STDERR_TAIL = 1_500;
 const POST_STDERR_TAIL = 800;
@@ -102,6 +102,7 @@ const POST_STDERR_TAIL = 800;
  * @param {Object<string, string>} [opts.seedFiles={}]   Map of filename to file contents to write into the workspace before the agent runs.
  * @param {string|null} [opts.preconditionMustFail=null] Filename of a script that must exit non-zero *before* the agent runs (asserts the test is well-posed). Family A pattern.
  * @param {string|null} [opts.postScript=null]    Filename of a script to run *after* the agent. Result populates ctx.post. Optional — when omitted ctx.post stays null.
+ * @param {number}   [opts.postScriptTimeoutMs=5000] Per-test override for the post-script timeout. Default fits cheap verify scripts; raise it for genuinely-expensive verifies.
  * @param {number}   [opts.timeoutMs=240000]      Agent run timeout. Forwarded to the runner; surfaced as terminal_status='timeout' on the RunnerResult.
  * @param {string}   opts.testLabel               Required. Used in the run log header.
  * @param {Runner}   [opts.runner=defaultRunner]  Inject a non-claw agent runner (Aider/Codex/etc.) under the same harness.
@@ -112,6 +113,7 @@ export async function runAgentSetup({
   seedFiles = {},
   preconditionMustFail = null,
   postScript = null,
+  postScriptTimeoutMs = DEFAULT_POST_SCRIPT_TIMEOUT_MS,
   timeoutMs = 240_000,
   testLabel,
   runner = defaultRunner,
@@ -146,7 +148,7 @@ export async function runAgentSetup({
   function runPost(filename) {
     post = spawnSync('node', [path.join(workspace.WORKSPACE, filename)], {
       encoding: 'utf8',
-      timeout:  POST_SCRIPT_TIMEOUT_MS,
+      timeout:  postScriptTimeoutMs,
       cwd:      workspace.WORKSPACE,
     });
     console.log(`  node post: ${filename} exit=${post.status} stderr=${post.stderr.slice(0, 400).trim()}`);
