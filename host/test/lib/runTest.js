@@ -54,8 +54,9 @@ import { runClaw, writeAssertionResult } from './claw.js';
 import * as workspace from './workspace.js';
 import { clawModel, TIER_LABEL } from './tier.js';
 
-const DEFAULT_POST_SCRIPT_TIMEOUT_MS = 5_000;
-const PRE_CONDITION_TIMEOUT_MS = 5_000;
+const DEFAULT_AGENT_TIMEOUT_MS        = 240_000;
+const DEFAULT_POST_SCRIPT_TIMEOUT_MS  = 5_000;
+const DEFAULT_PRECONDITION_TIMEOUT_MS = 5_000;
 const AGENT_STDERR_TAIL = 1_500;
 const POST_STDERR_TAIL = 800;
 
@@ -107,6 +108,7 @@ const POST_STDERR_TAIL = 800;
  * @param {Object<string, string>} [opts.seedFiles={}]   Map of filename to file contents to write into the workspace before the agent runs.
  * @param {string|null} [opts.preconditionMustFail=null] Filename of a script that must exit non-zero *before* the agent runs (asserts the test is well-posed). Family A pattern.
  * @param {string|null} [opts.postScript=null]    Filename of a script to run *after* the agent. Result populates ctx.post. Optional — when omitted ctx.post stays null.
+ * @param {number}   [opts.preconditionTimeoutMs=5000] Per-test override for the precondition-script timeout. Preconditions are sanity checks and should be fast; raise only if a test legitimately needs more.
  * @param {number}   [opts.postScriptTimeoutMs=5000] Per-test override for the post-script timeout. Default fits cheap verify scripts; raise it for genuinely-expensive verifies.
  * @param {number}   [opts.timeoutMs=240000]      Agent run timeout. Forwarded to the runner; surfaced as terminal_status='timeout' on the RunnerResult.
  * @param {string}   opts.testLabel               Required. Used in the run log header.
@@ -117,9 +119,10 @@ export async function runAgentSetup({
   prompt,
   seedFiles = {},
   preconditionMustFail = null,
+  preconditionTimeoutMs = DEFAULT_PRECONDITION_TIMEOUT_MS,
   postScript = null,
   postScriptTimeoutMs = DEFAULT_POST_SCRIPT_TIMEOUT_MS,
-  timeoutMs = 240_000,
+  timeoutMs = DEFAULT_AGENT_TIMEOUT_MS,
   testLabel,
   runner = defaultRunner,
 }) {
@@ -134,7 +137,7 @@ export async function runAgentSetup({
   if (preconditionMustFail) {
     const pre = spawnSync('node', [path.join(workspace.WORKSPACE, preconditionMustFail)], {
       encoding: 'utf8',
-      timeout:  PRE_CONDITION_TIMEOUT_MS,
+      timeout:  preconditionTimeoutMs,
     });
     assert.notEqual(
       pre.status, 0,
