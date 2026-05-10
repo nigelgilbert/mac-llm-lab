@@ -138,7 +138,7 @@ describe(`csv-parser: RFC 4180-ish parser (tier=${TIER_LABEL})`, () => {
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
       timeoutMs:  CLAW_TIMEOUT,
-      testLabel:  'csv-parser',
+      testId:  'csv-parser',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('verify.js', VERIFY_JS);

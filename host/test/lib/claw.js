@@ -80,14 +80,6 @@ export function runClaw({
   timeoutMs = 240_000,
   extraArgs = [],
 }) {
-  // Best-effort: if ITER_DIST_TEST_ID isn't set, infer it from the caller's
-  // stack frame. Lets RUN_REGISTRY_EMIT=1 produce rows from the existing
-  // tier-eval tests without touching test files. Falls back to null
-  // (preserving the existing iter-distribution-driver behavior).
-  if (!process.env.ITER_DIST_TEST_ID) {
-    const inferred = inferTestIdFromStack();
-    if (inferred) process.env.ITER_DIST_TEST_ID = inferred;
-  }
   return new Promise((resolve, reject) => {
     const args = ['-p', prompt, '--model', model, ...extraArgs];
     const runId = randomUUID();
@@ -808,19 +800,3 @@ function intEnv(name) {
   return Number.isFinite(n) ? n : null;
 }
 
-// Walk the V8 stack at runClaw entry to find the .test.js file that called
-// us, and derive `test_id` from its basename. This is the same convention
-// the test_manifest accessor uses to map filename → test_id (the manifest
-// header carries the canonical id; we only need to find the file).
-//
-// Matches any path ending in /<name>.test.js. The first match wins. Returns
-// null on no match (preserving the existing ITER_DIST_TEST_ID-or-null path).
-function inferTestIdFromStack() {
-  const stack = new Error().stack || '';
-  const re = /\/([A-Za-z0-9_-]+)\.test\.js/g;
-  let m;
-  while ((m = re.exec(stack)) !== null) {
-    return m[1];
-  }
-  return null;
-}

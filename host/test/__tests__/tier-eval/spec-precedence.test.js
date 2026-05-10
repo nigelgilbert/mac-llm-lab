@@ -75,7 +75,7 @@ describe(`spec-precedence: ordered transformation rules (tier=${TIER_LABEL})`, (
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
       timeoutMs:  TIMEOUT,
-      testLabel:  'spec-precedence',
+      testId:  'spec-precedence',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('verify.js', VERIFY_JS);

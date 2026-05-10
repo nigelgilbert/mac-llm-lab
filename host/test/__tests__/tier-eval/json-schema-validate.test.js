@@ -160,7 +160,7 @@ describe(`json-schema-validate: recursive validator (tier=${TIER_LABEL})`, () =>
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
       timeoutMs:  TIMEOUT,
-      testLabel:  'json-schema-validate',
+      testId:  'json-schema-validate',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('verify.js', VERIFY_JS);

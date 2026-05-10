@@ -329,7 +329,7 @@ describe(`ini-parser: line-by-line config parser with section reentry (tier=${TI
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
       timeoutMs:  CLAW_TIMEOUT,
-      testLabel:  'ini-parser',
+      testId:  'ini-parser',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('verify.js', VERIFY_JS);

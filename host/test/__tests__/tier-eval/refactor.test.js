@@ -62,7 +62,7 @@ describe(`refactor: fix seeded off-by-one (tier=${TIER_LABEL})`, () => {
       preconditionMustFail: 'buggy.js',
       postScript:           'buggy.js',
       timeoutMs:            CLAW_TIMEOUT,
-      testLabel:            'refactor',
+      testId:            'refactor',
     });
     await ctx.finish();
   });

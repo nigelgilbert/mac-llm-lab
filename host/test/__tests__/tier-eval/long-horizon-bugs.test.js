@@ -122,7 +122,7 @@ describe(`long-horizon: 4 bugs across 6 files (tier=${TIER_LABEL})`, () => {
       preconditionMustFail: 'test.js',
       postScript:           'test.js',
       timeoutMs:            TIMEOUT,
-      testLabel:            'long-horizon-bugs',
+      testId:            'long-horizon-bugs',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('README.md', README_MD);

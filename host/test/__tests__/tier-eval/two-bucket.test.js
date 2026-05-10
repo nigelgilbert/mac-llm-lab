@@ -221,7 +221,7 @@ describe(`two-bucket: shortest-path BFS with explicit path reconstruction (tier=
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
       timeoutMs:  CLAW_TIMEOUT,
-      testLabel:  'two-bucket',
+      testId:  'two-bucket',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('verify.js', VERIFY_JS);

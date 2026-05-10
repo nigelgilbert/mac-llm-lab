@@ -134,7 +134,7 @@ describe(`expression-eval: recursive-descent parser (tier=${TIER_LABEL})`, () =>
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
       timeoutMs:  CLAW_TIMEOUT,
-      testLabel:  'expression-eval',
+      testId:  'expression-eval',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('verify.js', VERIFY_JS);

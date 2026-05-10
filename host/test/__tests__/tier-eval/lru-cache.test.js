@@ -168,7 +168,7 @@ describe(`lru-cache: LRU + TTL + eviction callback (tier=${TIER_LABEL})`, () => 
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
       timeoutMs:  CLAW_TIMEOUT,
-      testLabel:  'lru-cache',
+      testId:  'lru-cache',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('verify.js', VERIFY_JS);

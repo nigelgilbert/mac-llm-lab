@@ -76,7 +76,7 @@ describe(`state-machine: traffic light (tier=${TIER_LABEL})`, () => {
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
       timeoutMs:  TIMEOUT,
-      testLabel:  'state-machine',
+      testId:  'state-machine',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('verify.js', VERIFY_JS);

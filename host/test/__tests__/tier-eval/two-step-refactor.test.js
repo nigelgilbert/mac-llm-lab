@@ -76,7 +76,7 @@ describe(`two-step refactor: extract helper and fix latent bug (tier=${TIER_LABE
       preconditionMustFail: 'stats.js',
       postScript:           'stats.js',
       timeoutMs:            TIMEOUT,
-      testLabel:            'two-step-refactor',
+      testId:            'two-step-refactor',
     });
     await ctx.finish();
   });

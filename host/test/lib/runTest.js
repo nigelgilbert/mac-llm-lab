@@ -111,7 +111,7 @@ const POST_STDERR_TAIL = 800;
  * @param {number}   [opts.preconditionTimeoutMs=5000] Per-test override for the precondition-script timeout. Preconditions are sanity checks and should be fast; raise only if a test legitimately needs more.
  * @param {number}   [opts.postScriptTimeoutMs=5000] Per-test override for the post-script timeout. Default fits cheap verify scripts; raise it for genuinely-expensive verifies.
  * @param {number}   [opts.timeoutMs=240000]      Agent run timeout. Forwarded to the runner; surfaced as terminal_status='timeout' on the RunnerResult.
- * @param {string}   opts.testLabel               Required. Used in the run log header.
+ * @param {string}   opts.testId                  Required. Test identifier — used for the run log header and propagated as `process.env.ITER_DIST_TEST_ID` for downstream registry-row emission in claw.js. Convention: matches the test-file basename.
  * @param {Runner}   [opts.runner=defaultRunner]  Inject a non-claw agent runner (Aider/Codex/etc.) under the same harness.
  * @returns {Promise<AgentCtx>}
  */
@@ -123,11 +123,15 @@ export async function runAgentSetup({
   postScript = null,
   postScriptTimeoutMs = DEFAULT_POST_SCRIPT_TIMEOUT_MS,
   timeoutMs = DEFAULT_AGENT_TIMEOUT_MS,
-  testLabel,
+  testId,
   runner = defaultRunner,
 }) {
   if (!prompt) throw new Error('runAgentSetup: prompt required');
-  if (!testLabel) throw new Error('runAgentSetup: testLabel required');
+  if (!testId) throw new Error('runAgentSetup: testId required');
+
+  // Bridge to claw.js's run-summary/registry-emit path: harness owns
+  // test identity, so alternate runners get registry rows for free.
+  process.env.ITER_DIST_TEST_ID = testId;
 
   workspace.reset();
   for (const [name, body] of Object.entries(seedFiles)) {
@@ -147,7 +151,7 @@ export async function runAgentSetup({
 
   const agent = await runner({ prompt, timeoutMs });
 
-  console.log(`\n=== ${testLabel} (${TIER_LABEL}) ===`);
+  console.log(`\n=== ${testId} (${TIER_LABEL}) ===`);
   console.log(`  agent: exit=${agent.code} elapsed=${agent.elapsedMs}ms files=${JSON.stringify(workspace.list())}`);
   if (agent.code !== 0) console.log(`  agent stderr (tail):\n${agent.stderr.slice(-AGENT_STDERR_TAIL)}`);
 

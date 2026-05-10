@@ -137,7 +137,7 @@ describe(`eight-functions: 12 helpers with cross-file deps (tier=${TIER_LABEL})`
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
       timeoutMs:  CLAW_TIMEOUT,
-      testLabel:  'eight-functions',
+      testId:  'eight-functions',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('verify.js', VERIFY_JS);

@@ -109,7 +109,7 @@ describe(`tool-confusion-redundant-verifies: parse() with red-herring verifiers 
       },
       postScript: 'verify.js',
       timeoutMs:  CLAW_TIMEOUT,
-      testLabel:  'tool-confusion-redundant-verifies',
+      testId:  'tool-confusion-redundant-verifies',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('verify.js', VERIFY_JS);

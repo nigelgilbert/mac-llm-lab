@@ -127,7 +127,7 @@ describe(`multi-bug-decoy: 5 bugs + 1 correct helper (tier=${TIER_LABEL})`, () =
       preconditionMustFail: 'helpers.js',
       postScript:           'helpers.js',
       timeoutMs:            TIMEOUT,
-      testLabel:            'multi-bug-decoy',
+      testId:            'multi-bug-decoy',
     });
     await ctx.finish();
   });

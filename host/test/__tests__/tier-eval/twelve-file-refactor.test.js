@@ -475,7 +475,7 @@ describe(`twelve-file-refactor: thread two params through 7 call sites in 12 fil
       preconditionMustFail: 'test.js',
       postScript:           'test.js',
       timeoutMs:            CLAW_TIMEOUT,
-      testLabel:            'twelve-file-refactor',
+      testId:            'twelve-file-refactor',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('test.js', TEST_JS);

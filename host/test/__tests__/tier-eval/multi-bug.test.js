@@ -74,7 +74,7 @@ describe(`multi-bug: fix three independent bugs (tier=${TIER_LABEL})`, () => {
       preconditionMustFail: 'text.js',
       postScript:           'text.js',
       timeoutMs:            TIMEOUT,
-      testLabel:            'multi-bug',
+      testId:            'multi-bug',
     });
     await ctx.finish();
   });

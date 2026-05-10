@@ -90,7 +90,7 @@ describe(`subtle-broken-spec: formatTime with prompt/verify mismatch (tier=${TIE
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
       timeoutMs:  CLAW_TIMEOUT,
-      testLabel:  'subtle-broken-spec',
+      testId:  'subtle-broken-spec',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('verify.js', VERIFY_JS);

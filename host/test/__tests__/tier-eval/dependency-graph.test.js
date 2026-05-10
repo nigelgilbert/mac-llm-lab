@@ -92,7 +92,7 @@ describe(`dependency-graph: topological sort with cycle detection (tier=${TIER_L
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
       timeoutMs:  TIMEOUT,
-      testLabel:  'dependency-graph',
+      testId:  'dependency-graph',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('verify.js', VERIFY_JS);

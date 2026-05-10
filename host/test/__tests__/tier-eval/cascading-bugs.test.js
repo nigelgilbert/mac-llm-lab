@@ -91,7 +91,7 @@ describe(`cascading-bugs: 5 sequential failures, one runner (tier=${TIER_LABEL})
       preconditionMustFail: 'run.js',
       postScript:           'run.js',
       timeoutMs:            TIMEOUT,
-      testLabel:            'cascading-bugs',
+      testId:            'cascading-bugs',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('run.js', RUN_JS);

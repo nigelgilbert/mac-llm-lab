@@ -75,7 +75,7 @@ describe(`multi-file rename + signature change (tier=${TIER_LABEL})`, () => {
       preconditionMustFail: 'index.js',
       postScript:           'index.js',
       timeoutMs:            TIMEOUT,
-      testLabel:            'multi-file-rename',
+      testId:            'multi-file-rename',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('index.js', INDEX_JS);

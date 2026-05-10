@@ -70,7 +70,7 @@ describe(`api evolution: signature reorder across two files (tier=${TIER_LABEL})
       preconditionMustFail: 'app.js',
       postScript:           'app.js',
       timeoutMs:            CLAW_TIMEOUT,
-      testLabel:            'api-evolution',
+      testId:            'api-evolution',
     });
     await ctx.finish();
   });

@@ -112,7 +112,7 @@ describe(`large-refactor: thread currency through 5 call sites (tier=${TIER_LABE
       preconditionMustFail: 'test.js',
       postScript:           'test.js',
       timeoutMs:            CLAW_TIMEOUT,
-      testLabel:            'large-refactor',
+      testId:            'large-refactor',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('test.js', TEST_JS);

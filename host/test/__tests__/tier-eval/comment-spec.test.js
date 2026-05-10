@@ -85,7 +85,7 @@ describe(`comment-spec: implement from JSDoc (tier=${TIER_LABEL})`, () => {
       preconditionMustFail: 'verify.js',
       postScript:           'verify.js',
       timeoutMs:            TIMEOUT,
-      testLabel:            'comment-spec',
+      testId:            'comment-spec',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('verify.js', VERIFY_JS);

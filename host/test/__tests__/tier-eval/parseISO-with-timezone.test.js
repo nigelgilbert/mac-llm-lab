@@ -83,7 +83,7 @@ describe(`parseISO-with-timezone: ISO 8601 parser (tier=${TIER_LABEL})`, () => {
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
       timeoutMs:  CLAW_TIMEOUT,
-      testLabel:  'parseISO-with-timezone',
+      testId:  'parseISO-with-timezone',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('verify.js', VERIFY_JS);

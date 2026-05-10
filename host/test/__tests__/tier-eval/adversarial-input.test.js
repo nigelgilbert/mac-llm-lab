@@ -62,7 +62,7 @@ describe(`adversarial inputs: slugify (tier=${TIER_LABEL})`, () => {
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
       timeoutMs:  CLAW_TIMEOUT,
-      testLabel:  'adversarial-input',
+      testId:  'adversarial-input',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('verify.js', VERIFY_JS);

@@ -470,7 +470,7 @@ describe(`word-search v2.1: dual-anchor multi-match enumeration (tier=${TIER_LAB
       },
       postScript: 'verify.js',
       timeoutMs:  CLAW_TIMEOUT,
-      testLabel:  'word-search',
+      testId:  'word-search',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('verify.js', VERIFY_JS);

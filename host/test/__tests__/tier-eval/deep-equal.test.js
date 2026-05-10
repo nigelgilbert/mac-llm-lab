@@ -61,7 +61,7 @@ describe(`deep-equal: structural equality (tier=${TIER_LABEL})`, () => {
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
       timeoutMs:  CLAW_TIMEOUT,
-      testLabel:  'deep-equal',
+      testId:  'deep-equal',
     });
     await ctx.finish(() => {
       ctx.workspace.unchanged('verify.js', VERIFY_JS);

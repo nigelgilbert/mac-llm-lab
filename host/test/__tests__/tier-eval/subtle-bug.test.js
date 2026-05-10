@@ -63,7 +63,7 @@ describe(`subtle bug: default-sort lexicographic (tier=${TIER_LABEL})`, () => {
       preconditionMustFail: 'median.js',
       postScript:           'median.js',
       timeoutMs:            TIMEOUT,
-      testLabel:            'subtle-bug',
+      testId:            'subtle-bug',
     });
     await ctx.finish();
   });
