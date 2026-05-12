@@ -9,7 +9,7 @@
 // are computed against planned N rather than observed N.
 //
 // Eligibility rule: a tier-eval test is "emit-eligible" if it invokes a
-// registry-writing entry point — either the lib/runTest.js helper (Sprint
+// registry-writing entry point — either the lib/runAgent.js helper (Sprint
 // 1.22) or the underlying writeAssertionResult primitive directly. The three
 // streamMessage-based tests (latency, tool-discipline, prose-quality) do not
 // call either and so do not produce registry rows; they're excluded from the
@@ -61,12 +61,12 @@ function printHelp() {
 
 function isEmitEligible(filePath) {
   // A tier-eval test produces a registry row iff its source references one of
-  // the two registry-writing entry points: the lib/runTest.js helper (Sprint
-  // 1.22 migration target) or the underlying writeAssertionResult primitive
-  // (pre-migration tests + any future test that opts out of the helper).
-  // Family C (latency / prose-quality / tool-discipline) references neither.
+  // the two registry-writing entry points: the lib/runAgent.js helper (Sprint
+  // 1.22, ex-runAgentSetup) or the underlying writeAssertionResult primitive
+  // (custom tests that opt out of the helper, e.g. frontier/*). Family C
+  // (latency / prose-quality / tool-discipline) references neither.
   const src = fs.readFileSync(filePath, 'utf8');
-  return /\b(runTest|writeAssertionResult)\b/.test(src);
+  return /\b(runAgent|writeAssertionResult)\b/.test(src);
 }
 
 function listEligibleTests(testsDir) {

@@ -36,7 +36,8 @@
 
 import { describe, it } from 'node:test';
 
-import { runAgentSetup } from '../../lib/runTest.js';
+import assert from 'node:assert/strict';
+import { runAgent } from '../../lib/runAgent.js';
 import { TIER_LABEL } from '../../lib/tier.js';
 
 // Real verify (authoritative). Tests parse() returning a flat
@@ -99,8 +100,8 @@ const CLAW_TIMEOUT = 180_000;
 const TIMEOUT = CLAW_TIMEOUT + 20_000;
 
 describe(`tool-confusion-redundant-verifies: parse() with red-herring verifiers (tier=${TIER_LABEL})`, () => {
-  it('claw implements parse against verify.js, ignoring red-herring verifiers', { timeout: TIMEOUT }, async () => {
-    const ctx = await runAgentSetup({
+  it('claw implements parse against verify.js, ignoring red-herring verifiers', { timeout: TIMEOUT }, async (t) => {
+    const ctx = await runAgent({
       prompt:     PROMPT,
       seedFiles:  {
         'verify.js':   VERIFY_JS,
@@ -108,13 +109,16 @@ describe(`tool-confusion-redundant-verifies: parse() with red-herring verifiers 
         'validate.js': VALIDATE_JS,
       },
       postScript: 'verify.js',
-      timeoutMs:  CLAW_TIMEOUT,
       testId:  'tool-confusion-redundant-verifies',
+      t,
     });
-    await ctx.finish(() => {
-      ctx.workspace.unchanged('verify.js', VERIFY_JS);
-      ctx.workspace.unchanged('check.js', CHECK_JS);
-      ctx.workspace.unchanged('validate.js', VALIDATE_JS);
-    });
+    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
+    ctx.workspace.unchanged('verify.js', VERIFY_JS);
+    ctx.workspace.unchanged('check.js', CHECK_JS);
+    ctx.workspace.unchanged('validate.js', VALIDATE_JS);
+    if (ctx.post) assert.equal(
+      ctx.post.status, 0,
+      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
+    );
   });
 });

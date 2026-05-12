@@ -33,7 +33,8 @@
 
 import { describe, it } from 'node:test';
 
-import { runAgentSetup } from '../../lib/runTest.js';
+import assert from 'node:assert/strict';
+import { runAgent } from '../../lib/runAgent.js';
 import { TIER_LABEL } from '../../lib/tier.js';
 
 const VERIFY_JS = `\
@@ -121,16 +122,19 @@ Then ensure \`node verify.js\` exits 0. Do not edit verify.js.`;
 const CLAW_TIMEOUT = 285_000;
 
 describe(`wordy: arithmetic query parser (tier=${TIER_LABEL})`, () => {
-  it('claw solves the task', { timeout: CLAW_TIMEOUT + 20_000 }, async () => {
-    const ctx = await runAgentSetup({
+  it('claw solves the task', { timeout: CLAW_TIMEOUT + 20_000 }, async (t) => {
+    const ctx = await runAgent({
       prompt:     PROMPT,
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
-      timeoutMs:  CLAW_TIMEOUT,
       testId:  'wordy',
+      t,
     });
-    await ctx.finish(() => {
-      ctx.workspace.unchanged('verify.js', VERIFY_JS);
-    });
+    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
+    ctx.workspace.unchanged('verify.js', VERIFY_JS);
+    if (ctx.post) assert.equal(
+      ctx.post.status, 0,
+      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
+    );
   });
 });

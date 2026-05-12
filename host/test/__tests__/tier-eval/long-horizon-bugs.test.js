@@ -35,7 +35,8 @@
 
 import { describe, it } from 'node:test';
 
-import { runAgentSetup } from '../../lib/runTest.js';
+import assert from 'node:assert/strict';
+import { runAgent } from '../../lib/runAgent.js';
 import { TIER_LABEL } from '../../lib/tier.js';
 
 const MATH_JS = `\
@@ -115,17 +116,20 @@ const PROMPT =
 const TIMEOUT = 300_000;
 
 describe(`long-horizon: 4 bugs across 6 files (tier=${TIER_LABEL})`, () => {
-  it('claw fixes every bug across the helper modules', { timeout: TIMEOUT }, async () => {
-    const ctx = await runAgentSetup({
+  it('claw fixes every bug across the helper modules', { timeout: TIMEOUT }, async (t) => {
+    const ctx = await runAgent({
       prompt:               PROMPT,
       seedFiles:            { 'math.js': MATH_JS, 'strings.js': STRINGS_JS, 'arrays.js': ARRAYS_JS, 'objects.js': OBJECTS_JS, 'test.js': TEST_JS, 'README.md': README_MD },
       preconditionMustFail: 'test.js',
       postScript:           'test.js',
-      timeoutMs:            TIMEOUT,
       testId:            'long-horizon-bugs',
+      t,
     });
-    await ctx.finish(() => {
-      ctx.workspace.unchanged('README.md', README_MD);
-    });
+    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
+    ctx.workspace.unchanged('README.md', README_MD);
+    if (ctx.post) assert.equal(
+      ctx.post.status, 0,
+      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
+    );
   });
 });

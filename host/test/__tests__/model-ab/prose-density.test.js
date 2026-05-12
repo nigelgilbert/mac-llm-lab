@@ -42,10 +42,10 @@ describe(`prose density via claw (model=${MODEL_LABEL}, bridge=${clawModel})`, (
   it(
     `${N}× markdown response: len ≥ ${MIN_TEXT_LEN}, newlines ≥ ${MIN_NEWLINES}, bullets ≥ ${MIN_BULLETS}`,
     { timeout: TIMEOUT },
-    async () => {
+    async ({ signal }) => {
       const results = [];
       for (let i = 0; i < N; i++) {
-        const r = await runClaw({ prompt: PROMPT, model: clawModel });
+        const r = await runClaw({ prompt: PROMPT, model: clawModel, signal});
         const clean    = stripAnsi(r.stdout);
         const newlines = (r.stdout.match(/\n/g) ?? []).length;
         // Bullet at start of a line — the strongest smush signal. In smushed

@@ -73,7 +73,7 @@ describe(`prose quality via raw bridge (tier=${TIER_LABEL})`, () => {
   it(
     `${N}× markdown via streamMessage: len ≥ ${MIN_TEXT_LEN}, newlines ≥ ${MIN_NEWLINES}, bullets ≥ ${MIN_BULLETS}`,
     { timeout: TIMEOUT },
-    async () => {
+    async ({ signal }) => {
       const results = [];
       for (let i = 0; i < N; i++) {
         const t0 = Date.now();
@@ -122,10 +122,10 @@ describe(`prose quality via claw renderer (tier=${TIER_LABEL}, informational)`, 
   it(
     `${N}× markdown via claw: counts reported, no assertions`,
     { timeout: TIMEOUT },
-    async () => {
+    async ({ signal }) => {
       const results = [];
       for (let i = 0; i < N; i++) {
-        const r     = await runClaw({ prompt: PROMPT, model: clawModel });
+        const r     = await runClaw({ prompt: PROMPT, model: clawModel, signal});
         const clean = stripAnsi(r.stdout);
         const { newlines, bullets } = countText(clean);
         results.push({ code: r.code, elapsedMs: r.elapsedMs, rawLen: r.stdout.length, cleanLen: clean.length, newlines, bullets, clean });

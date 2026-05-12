@@ -34,7 +34,8 @@
 
 import { describe, it } from 'node:test';
 
-import { runAgentSetup } from '../../lib/runTest.js';
+import assert from 'node:assert/strict';
+import { runAgent } from '../../lib/runAgent.js';
 import { TIER_LABEL } from '../../lib/tier.js';
 
 const PRICING_JS = `\
@@ -63,15 +64,19 @@ const CLAW_TIMEOUT = 240_000;
 const TIMEOUT = CLAW_TIMEOUT + 60_000;
 
 describe(`api evolution: signature reorder across two files (tier=${TIER_LABEL})`, () => {
-  it('claw reorders the signature and updates the call site', { timeout: TIMEOUT }, async () => {
-    const ctx = await runAgentSetup({
+  it('claw reorders the signature and updates the call site', { timeout: TIMEOUT }, async (t) => {
+    const ctx = await runAgent({
       prompt:               PROMPT,
       seedFiles:            { 'pricing.js': PRICING_JS, 'app.js': APP_JS },
       preconditionMustFail: 'app.js',
       postScript:           'app.js',
-      timeoutMs:            CLAW_TIMEOUT,
       testId:            'api-evolution',
+      t,
     });
-    await ctx.finish();
+    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
+    if (ctx.post) assert.equal(
+      ctx.post.status, 0,
+      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
+    );
   });
 });

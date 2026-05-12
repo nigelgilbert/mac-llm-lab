@@ -26,7 +26,8 @@
 
 import { describe, it } from 'node:test';
 
-import { runAgentSetup } from '../../lib/runTest.js';
+import assert from 'node:assert/strict';
+import { runAgent } from '../../lib/runAgent.js';
 import { TIER_LABEL } from '../../lib/tier.js';
 
 const VERIFY_JS = `\
@@ -70,16 +71,19 @@ const PROMPT =
 const TIMEOUT = 300_000;
 
 describe(`state-machine: traffic light (tier=${TIER_LABEL})`, () => {
-  it('claw implements the FSM with valid transitions and rejection of invalid ones', { timeout: TIMEOUT }, async () => {
-    const ctx = await runAgentSetup({
+  it('claw implements the FSM with valid transitions and rejection of invalid ones', { timeout: TIMEOUT }, async (t) => {
+    const ctx = await runAgent({
       prompt:     PROMPT,
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
-      timeoutMs:  TIMEOUT,
       testId:  'state-machine',
+      t,
     });
-    await ctx.finish(() => {
-      ctx.workspace.unchanged('verify.js', VERIFY_JS);
-    });
+    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
+    ctx.workspace.unchanged('verify.js', VERIFY_JS);
+    if (ctx.post) assert.equal(
+      ctx.post.status, 0,
+      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
+    );
   });
 });

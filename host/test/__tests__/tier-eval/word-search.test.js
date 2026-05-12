@@ -39,7 +39,8 @@
 import { describe, it } from 'node:test';
 import crypto from 'node:crypto';
 
-import { runAgentSetup } from '../../lib/runTest.js';
+import assert from 'node:assert/strict';
+import { runAgent } from '../../lib/runAgent.js';
 import { TIER_LABEL } from '../../lib/tier.js';
 
 // Pinned: bumping invalidates prior cycle runs. If buildBoard() throws at
@@ -460,8 +461,8 @@ Then ensure \`node verify.js\` exits 0. Do not edit verify.js, board.txt, or anc
 const CLAW_TIMEOUT = 285_000;
 
 describe(`word-search v2.1: dual-anchor multi-match enumeration (tier=${TIER_LABEL})`, () => {
-  it('claw solves the task', { timeout: CLAW_TIMEOUT + 20_000 }, async () => {
-    const ctx = await runAgentSetup({
+  it('claw solves the task', { timeout: CLAW_TIMEOUT + 20_000 }, async (t) => {
+    const ctx = await runAgent({
       prompt:     PROMPT,
       seedFiles:  {
         'verify.js':    VERIFY_JS,
@@ -469,13 +470,16 @@ describe(`word-search v2.1: dual-anchor multi-match enumeration (tier=${TIER_LAB
         'anchors.json': ANCHORS_JSON,
       },
       postScript: 'verify.js',
-      timeoutMs:  CLAW_TIMEOUT,
       testId:  'word-search',
+      t,
     });
-    await ctx.finish(() => {
-      ctx.workspace.unchanged('verify.js', VERIFY_JS);
-      ctx.workspace.unchanged('board.txt', BOARD_TXT);
-      ctx.workspace.unchanged('anchors.json', ANCHORS_JSON);
-    });
+    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
+    ctx.workspace.unchanged('verify.js', VERIFY_JS);
+    ctx.workspace.unchanged('board.txt', BOARD_TXT);
+    ctx.workspace.unchanged('anchors.json', ANCHORS_JSON);
+    if (ctx.post) assert.equal(
+      ctx.post.status, 0,
+      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
+    );
   });
 });

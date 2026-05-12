@@ -175,7 +175,10 @@ printf '%s\n' "$SCHEDULE" | while IFS=$'\t' read -r TEST SAMPLER REP; do
     -e "CTX=65536" \
     -e "GIT_SHA=$GIT_SHA" \
     -e "HARDWARE_INSTANCE=$HARDWARE_INSTANCE" \
-    test node --test --test-concurrency=1 "__tests__/tier-eval/${TEST}.test.js" \
+    test node --test --test-concurrency=1 \
+      --test-reporter=spec --test-reporter-destination=stdout \
+      --test-reporter=./lib/registry-reporter.js --test-reporter-destination=stdout \
+      "__tests__/tier-eval/${TEST}.test.js" \
     </dev/null >>"$LOG" 2>&1 || log "  (test failed or timed out — telemetry sidecar should still be present)"
 done
 

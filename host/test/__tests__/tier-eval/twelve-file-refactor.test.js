@@ -39,7 +39,8 @@
 
 import { describe, it } from 'node:test';
 
-import { runAgentSetup } from '../../lib/runTest.js';
+import assert from 'node:assert/strict';
+import { runAgent } from '../../lib/runAgent.js';
 import { TIER_LABEL } from '../../lib/tier.js';
 
 // formatPrice — formats an amount. Currency and locale are currently hardcoded.
@@ -452,8 +453,8 @@ call formatPrice — leave them alone.`;
 const CLAW_TIMEOUT = 285_000;
 
 describe(`twelve-file-refactor: thread two params through 7 call sites in 12 files (tier=${TIER_LABEL})`, () => {
-  it('claw threads two parameters through every caller', { timeout: CLAW_TIMEOUT + 20_000 }, async () => {
-    const ctx = await runAgentSetup({
+  it('claw threads two parameters through every caller', { timeout: CLAW_TIMEOUT + 20_000 }, async (t) => {
+    const ctx = await runAgent({
       prompt:               PROMPT,
       seedFiles:            {
         'format.js':          FORMAT_JS,
@@ -474,17 +475,20 @@ describe(`twelve-file-refactor: thread two params through 7 call sites in 12 fil
       },
       preconditionMustFail: 'test.js',
       postScript:           'test.js',
-      timeoutMs:            CLAW_TIMEOUT,
       testId:            'twelve-file-refactor',
+      t,
     });
-    await ctx.finish(() => {
-      ctx.workspace.unchanged('test.js', TEST_JS);
-      ctx.workspace.unchanged('format-config.js', FORMAT_CONFIG_JS);
-      ctx.workspace.unchanged('currency-config.js', CURRENCY_CONFIG_JS);
-      ctx.workspace.unchanged('format-parse.js', FORMAT_PARSE_JS);
-      ctx.workspace.unchanged('notify.js', NOTIFY_JS);
-      ctx.workspace.unchanged('helper.js', HELPER_JS);
-      ctx.workspace.unchanged('constants.js', CONSTANTS_JS);
-    });
+    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
+    ctx.workspace.unchanged('test.js', TEST_JS);
+    ctx.workspace.unchanged('format-config.js', FORMAT_CONFIG_JS);
+    ctx.workspace.unchanged('currency-config.js', CURRENCY_CONFIG_JS);
+    ctx.workspace.unchanged('format-parse.js', FORMAT_PARSE_JS);
+    ctx.workspace.unchanged('notify.js', NOTIFY_JS);
+    ctx.workspace.unchanged('helper.js', HELPER_JS);
+    ctx.workspace.unchanged('constants.js', CONSTANTS_JS);
+    if (ctx.post) assert.equal(
+      ctx.post.status, 0,
+      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
+    );
   });
 });

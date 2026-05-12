@@ -34,7 +34,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { runAgentSetup } from '../../lib/runTest.js';
+import { runAgent } from '../../lib/runAgent.js';
 import { TIER_LABEL } from '../../lib/tier.js';
 
 const A_JS = `\
@@ -84,18 +84,21 @@ const PROMPT =
 const TIMEOUT = 300_000;
 
 describe(`cascading-bugs: 5 sequential failures, one runner (tier=${TIER_LABEL})`, () => {
-  it('claw iterates run/fix until run.js exits clean', { timeout: TIMEOUT }, async () => {
-    const ctx = await runAgentSetup({
+  it('claw iterates run/fix until run.js exits clean', { timeout: TIMEOUT }, async (t) => {
+    const ctx = await runAgent({
       prompt:               PROMPT,
       seedFiles:            { 'a.js': A_JS, 'b.js': B_JS, 'c.js': C_JS, 'd.js': D_JS, 'e.js': E_JS, 'run.js': RUN_JS },
       preconditionMustFail: 'run.js',
       postScript:           'run.js',
-      timeoutMs:            TIMEOUT,
       testId:            'cascading-bugs',
+      t,
     });
-    await ctx.finish(() => {
-      ctx.workspace.unchanged('run.js', RUN_JS);
-      assert.match(ctx.post.stdout, /all-pass/, 'expected all-pass marker');
-    });
+    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
+    ctx.workspace.unchanged('run.js', RUN_JS);
+    assert.match(ctx.post.stdout, /all-pass/, 'expected all-pass marker');
+    if (ctx.post) assert.equal(
+      ctx.post.status, 0,
+      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
+    );
   });
 });

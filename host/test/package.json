@@ -5,6 +5,6 @@
   "type": "module",
   "description": "A/B harness comparing the two claw backends (Ollama vs llama-server) over the LiteLLM bridge.",
   "scripts": {
-    "test": "node --test --test-concurrency=1 --test-reporter=spec"
+    "test": "node --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./lib/registry-reporter.js --test-reporter-destination=stdout"
   }
 }

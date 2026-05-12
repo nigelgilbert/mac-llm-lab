@@ -29,7 +29,8 @@
 
 import { describe, it } from 'node:test';
 
-import { runAgentSetup } from '../../lib/runTest.js';
+import assert from 'node:assert/strict';
+import { runAgent } from '../../lib/runAgent.js';
 import { TIER_LABEL } from '../../lib/tier.js';
 
 const VERIFY_JS = `\
@@ -56,16 +57,19 @@ const PROMPT =
 const TIMEOUT = 300_000;
 
 describe(`spec compliance: multi-requirement formatPrice (tier=${TIER_LABEL})`, () => {
-  it('claw implements formatPrice satisfying all four requirements', { timeout: TIMEOUT }, async () => {
-    const ctx = await runAgentSetup({
+  it('claw implements formatPrice satisfying all four requirements', { timeout: TIMEOUT }, async (t) => {
+    const ctx = await runAgent({
       prompt:     PROMPT,
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
-      timeoutMs:  TIMEOUT,
       testId:  'spec-compliance',
+      t,
     });
-    await ctx.finish(() => {
-      ctx.workspace.unchanged('verify.js', VERIFY_JS);
-    });
+    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
+    ctx.workspace.unchanged('verify.js', VERIFY_JS);
+    if (ctx.post) assert.equal(
+      ctx.post.status, 0,
+      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
+    );
   });
 });

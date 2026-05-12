@@ -41,7 +41,8 @@
 
 import { describe, it } from 'node:test';
 
-import { runAgentSetup } from '../../lib/runTest.js';
+import assert from 'node:assert/strict';
+import { runAgent } from '../../lib/runAgent.js';
 import { TIER_LABEL } from '../../lib/tier.js';
 
 const HELPERS_JS = `\
@@ -120,15 +121,19 @@ const PROMPT =
 const TIMEOUT = 300_000;
 
 describe(`multi-bug-decoy: 5 bugs + 1 correct helper (tier=${TIER_LABEL})`, () => {
-  it('claw fixes the bugs without breaking the decoy', { timeout: TIMEOUT }, async () => {
-    const ctx = await runAgentSetup({
+  it('claw fixes the bugs without breaking the decoy', { timeout: TIMEOUT }, async (t) => {
+    const ctx = await runAgent({
       prompt:               PROMPT,
       seedFiles:            { 'helpers.js': HELPERS_JS },
       preconditionMustFail: 'helpers.js',
       postScript:           'helpers.js',
-      timeoutMs:            TIMEOUT,
       testId:            'multi-bug-decoy',
+      t,
     });
-    await ctx.finish();
+    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
+    if (ctx.post) assert.equal(
+      ctx.post.status, 0,
+      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
+    );
   });
 });

@@ -30,8 +30,8 @@ const TIMEOUT = 300_000;
 describe(`agent: parallel file writes (model=${MODEL_LABEL}, bridge=${clawModel})`, () => {
   beforeEach(() => workspace.reset());
 
-  it('claw creates a.py, b.py, c.py with matching contents', { timeout: TIMEOUT }, async () => {
-    const r = await runClaw({ prompt: PROMPT, model: clawModel });
+  it('claw creates a.py, b.py, c.py with matching contents', { timeout: TIMEOUT }, async ({ signal }) => {
+    const r = await runClaw({ prompt: PROMPT, model: clawModel, signal});
 
     console.log(`\n=== agent-parallel (${MODEL_LABEL}) ===`);
     console.log(`  exit=${r.code} elapsed=${r.elapsedMs}ms files=${JSON.stringify(workspace.list())}`);

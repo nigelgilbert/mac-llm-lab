@@ -31,7 +31,8 @@
 
 import { describe, it } from 'node:test';
 
-import { runAgentSetup } from '../../lib/runTest.js';
+import assert from 'node:assert/strict';
+import { runAgent } from '../../lib/runAgent.js';
 import { TIER_LABEL } from '../../lib/tier.js';
 
 const LIB_JS = `\
@@ -68,17 +69,20 @@ const PROMPT =
 const TIMEOUT = 300_000;
 
 describe(`multi-file rename + signature change (tier=${TIER_LABEL})`, () => {
-  it('claw renames across files and updates the call site', { timeout: TIMEOUT }, async () => {
-    const ctx = await runAgentSetup({
+  it('claw renames across files and updates the call site', { timeout: TIMEOUT }, async (t) => {
+    const ctx = await runAgent({
       prompt:               PROMPT,
       seedFiles:            { 'lib.js': LIB_JS, 'service.js': SERVICE_JS, 'index.js': INDEX_JS },
       preconditionMustFail: 'index.js',
       postScript:           'index.js',
-      timeoutMs:            TIMEOUT,
       testId:            'multi-file-rename',
+      t,
     });
-    await ctx.finish(() => {
-      ctx.workspace.unchanged('index.js', INDEX_JS);
-    });
+    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
+    ctx.workspace.unchanged('index.js', INDEX_JS);
+    if (ctx.post) assert.equal(
+      ctx.post.status, 0,
+      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
+    );
   });
 });

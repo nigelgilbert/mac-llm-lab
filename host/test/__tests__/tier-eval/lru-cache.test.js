@@ -29,7 +29,8 @@
 
 import { describe, it } from 'node:test';
 
-import { runAgentSetup } from '../../lib/runTest.js';
+import assert from 'node:assert/strict';
+import { runAgent } from '../../lib/runAgent.js';
 import { TIER_LABEL } from '../../lib/tier.js';
 
 const VERIFY_JS = `\
@@ -162,16 +163,19 @@ const PROMPT =
 const CLAW_TIMEOUT = 240_000;
 
 describe(`lru-cache: LRU + TTL + eviction callback (tier=${TIER_LABEL})`, () => {
-  it('claw implements LRUCache satisfying every spec bullet', { timeout: CLAW_TIMEOUT + 20_000 }, async () => {
-    const ctx = await runAgentSetup({
+  it('claw implements LRUCache satisfying every spec bullet', { timeout: CLAW_TIMEOUT + 20_000 }, async (t) => {
+    const ctx = await runAgent({
       prompt:     PROMPT,
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
-      timeoutMs:  CLAW_TIMEOUT,
       testId:  'lru-cache',
+      t,
     });
-    await ctx.finish(() => {
-      ctx.workspace.unchanged('verify.js', VERIFY_JS);
-    });
+    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
+    ctx.workspace.unchanged('verify.js', VERIFY_JS);
+    if (ctx.post) assert.equal(
+      ctx.post.status, 0,
+      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
+    );
   });
 });

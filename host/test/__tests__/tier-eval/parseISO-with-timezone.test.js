@@ -32,7 +32,8 @@
 
 import { describe, it } from 'node:test';
 
-import { runAgentSetup } from '../../lib/runTest.js';
+import assert from 'node:assert/strict';
+import { runAgent } from '../../lib/runAgent.js';
 import { TIER_LABEL } from '../../lib/tier.js';
 
 const VERIFY_JS = `\
@@ -77,16 +78,19 @@ const CLAW_TIMEOUT = 180_000;
 const TIMEOUT = CLAW_TIMEOUT + 20_000;
 
 describe(`parseISO-with-timezone: ISO 8601 parser (tier=${TIER_LABEL})`, () => {
-  it('claw implements parseISO with offset handling and invalid-input throws', { timeout: TIMEOUT }, async () => {
-    const ctx = await runAgentSetup({
+  it('claw implements parseISO with offset handling and invalid-input throws', { timeout: TIMEOUT }, async (t) => {
+    const ctx = await runAgent({
       prompt:     PROMPT,
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
-      timeoutMs:  CLAW_TIMEOUT,
       testId:  'parseISO-with-timezone',
+      t,
     });
-    await ctx.finish(() => {
-      ctx.workspace.unchanged('verify.js', VERIFY_JS);
-    });
+    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
+    ctx.workspace.unchanged('verify.js', VERIFY_JS);
+    if (ctx.post) assert.equal(
+      ctx.post.status, 0,
+      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
+    );
   });
 });

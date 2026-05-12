@@ -31,7 +31,8 @@
 
 import { describe, it } from 'node:test';
 
-import { runAgentSetup } from '../../lib/runTest.js';
+import assert from 'node:assert/strict';
+import { runAgent } from '../../lib/runAgent.js';
 import { TIER_LABEL } from '../../lib/tier.js';
 
 const STATS_JS = `\
@@ -69,15 +70,19 @@ const PROMPT =
 const TIMEOUT = 300_000;
 
 describe(`two-step refactor: extract helper and fix latent bug (tier=${TIER_LABEL})`, () => {
-  it('claw extracts the helper without copying the off-by-one', { timeout: TIMEOUT }, async () => {
-    const ctx = await runAgentSetup({
+  it('claw extracts the helper without copying the off-by-one', { timeout: TIMEOUT }, async (t) => {
+    const ctx = await runAgent({
       prompt:               PROMPT,
       seedFiles:            { 'stats.js': STATS_JS },
       preconditionMustFail: 'stats.js',
       postScript:           'stats.js',
-      timeoutMs:            TIMEOUT,
       testId:            'two-step-refactor',
+      t,
     });
-    await ctx.finish();
+    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
+    if (ctx.post) assert.equal(
+      ctx.post.status, 0,
+      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
+    );
   });
 });

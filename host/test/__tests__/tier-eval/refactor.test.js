@@ -29,7 +29,8 @@
 
 import { describe, it } from 'node:test';
 
-import { runAgentSetup } from '../../lib/runTest.js';
+import assert from 'node:assert/strict';
+import { runAgent } from '../../lib/runAgent.js';
 import { TIER_LABEL } from '../../lib/tier.js';
 
 // Off-by-one: `i <= arr.length` reads arr[arr.length] === undefined.
@@ -55,15 +56,19 @@ const PROMPT =
 const CLAW_TIMEOUT = 240_000;
 
 describe(`refactor: fix seeded off-by-one (tier=${TIER_LABEL})`, () => {
-  it('claw fixes buggy.js so its assertions pass', { timeout: CLAW_TIMEOUT + 20_000 }, async () => {
-    const ctx = await runAgentSetup({
+  it('claw fixes buggy.js so its assertions pass', { timeout: CLAW_TIMEOUT + 20_000 }, async (t) => {
+    const ctx = await runAgent({
       prompt:               PROMPT,
       seedFiles:            { 'buggy.js': BUGGY_JS },
       preconditionMustFail: 'buggy.js',
       postScript:           'buggy.js',
-      timeoutMs:            CLAW_TIMEOUT,
       testId:            'refactor',
+      t,
     });
-    await ctx.finish();
+    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
+    if (ctx.post) assert.equal(
+      ctx.post.status, 0,
+      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
+    );
   });
 });

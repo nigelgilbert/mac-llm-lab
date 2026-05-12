@@ -29,7 +29,8 @@
 
 import { describe, it } from 'node:test';
 
-import { runAgentSetup } from '../../lib/runTest.js';
+import assert from 'node:assert/strict';
+import { runAgent } from '../../lib/runAgent.js';
 import { TIER_LABEL } from '../../lib/tier.js';
 
 const MEDIAN_JS = `\
@@ -56,15 +57,19 @@ const PROMPT =
 const TIMEOUT = 300_000;
 
 describe(`subtle bug: default-sort lexicographic (tier=${TIER_LABEL})`, () => {
-  it('claw fixes median.js so its assertions pass', { timeout: TIMEOUT }, async () => {
-    const ctx = await runAgentSetup({
+  it('claw fixes median.js so its assertions pass', { timeout: TIMEOUT }, async (t) => {
+    const ctx = await runAgent({
       prompt:               PROMPT,
       seedFiles:            { 'median.js': MEDIAN_JS },
       preconditionMustFail: 'median.js',
       postScript:           'median.js',
-      timeoutMs:            TIMEOUT,
       testId:            'subtle-bug',
+      t,
     });
-    await ctx.finish();
+    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
+    if (ctx.post) assert.equal(
+      ctx.post.status, 0,
+      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
+    );
   });
 });

@@ -30,7 +30,8 @@
 
 import { describe, it } from 'node:test';
 
-import { runAgentSetup } from '../../lib/runTest.js';
+import assert from 'node:assert/strict';
+import { runAgent } from '../../lib/runAgent.js';
 import { TIER_LABEL } from '../../lib/tier.js';
 
 const FORMAT_JS = `\
@@ -105,17 +106,20 @@ const CLAW_TIMEOUT = 240_000;
 const TIMEOUT = CLAW_TIMEOUT + 60_000;
 
 describe(`large-refactor: thread currency through 5 call sites (tier=${TIER_LABEL})`, () => {
-  it('claw threads the new parameter through every caller', { timeout: TIMEOUT }, async () => {
-    const ctx = await runAgentSetup({
+  it('claw threads the new parameter through every caller', { timeout: TIMEOUT }, async (t) => {
+    const ctx = await runAgent({
       prompt:               PROMPT,
       seedFiles:            { 'format.js': FORMAT_JS, 'cart.js': CART_JS, 'receipt.js': RECEIPT_JS, 'report.js': REPORT_JS, 'test.js': TEST_JS },
       preconditionMustFail: 'test.js',
       postScript:           'test.js',
-      timeoutMs:            CLAW_TIMEOUT,
       testId:            'large-refactor',
+      t,
     });
-    await ctx.finish(() => {
-      ctx.workspace.unchanged('test.js', TEST_JS);
-    });
+    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
+    ctx.workspace.unchanged('test.js', TEST_JS);
+    if (ctx.post) assert.equal(
+      ctx.post.status, 0,
+      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
+    );
   });
 });

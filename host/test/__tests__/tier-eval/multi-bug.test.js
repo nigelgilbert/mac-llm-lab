@@ -32,7 +32,8 @@
 
 import { describe, it } from 'node:test';
 
-import { runAgentSetup } from '../../lib/runTest.js';
+import assert from 'node:assert/strict';
+import { runAgent } from '../../lib/runAgent.js';
 import { TIER_LABEL } from '../../lib/tier.js';
 
 const TEXT_JS = `\
@@ -67,15 +68,19 @@ const PROMPT =
 const TIMEOUT = 300_000;
 
 describe(`multi-bug: fix three independent bugs (tier=${TIER_LABEL})`, () => {
-  it('claw fixes all three helpers', { timeout: TIMEOUT }, async () => {
-    const ctx = await runAgentSetup({
+  it('claw fixes all three helpers', { timeout: TIMEOUT }, async (t) => {
+    const ctx = await runAgent({
       prompt:               PROMPT,
       seedFiles:            { 'text.js': TEXT_JS },
       preconditionMustFail: 'text.js',
       postScript:           'text.js',
-      timeoutMs:            TIMEOUT,
       testId:            'multi-bug',
+      t,
     });
-    await ctx.finish();
+    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
+    if (ctx.post) assert.equal(
+      ctx.post.status, 0,
+      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
+    );
   });
 });

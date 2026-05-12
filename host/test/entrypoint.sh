@@ -91,7 +91,10 @@ for testfile in $files; do
   echo ">>> running $testfile (per-test cap ${PER_TEST_TIMEOUT}s)"
   rc=0
   timeout --signal=TERM --kill-after=15s "${PER_TEST_TIMEOUT}s" \
-    node --test --test-concurrency=1 --test-reporter=spec "$testfile" \
+    node --test --test-concurrency=1 \
+      --test-reporter=spec --test-reporter-destination=stdout \
+      --test-reporter=./lib/registry-reporter.js --test-reporter-destination=stdout \
+      "$testfile" \
     || rc=$?
   case "$rc" in
     0)        : ;;

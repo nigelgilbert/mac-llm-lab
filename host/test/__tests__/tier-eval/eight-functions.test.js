@@ -39,7 +39,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { runAgentSetup } from '../../lib/runTest.js';
+import { runAgent } from '../../lib/runAgent.js';
 import { TIER_LABEL } from '../../lib/tier.js';
 
 const VERIFY_JS = `\
@@ -131,20 +131,23 @@ const TARGETS = [
 ];
 
 describe(`eight-functions: 12 helpers with cross-file deps (tier=${TIER_LABEL})`, () => {
-  it('claw implements all twelve helpers with correct cross-file imports', { timeout: TIMEOUT }, async () => {
-    const ctx = await runAgentSetup({
+  it('claw implements all twelve helpers with correct cross-file imports', { timeout: TIMEOUT }, async (t) => {
+    const ctx = await runAgent({
       prompt:     PROMPT,
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
-      timeoutMs:  CLAW_TIMEOUT,
       testId:  'eight-functions',
+      t,
     });
-    await ctx.finish(() => {
-      ctx.workspace.unchanged('verify.js', VERIFY_JS);
-      const targetsPresent = TARGETS.map(f => ctx.workspace.exists(f));
-      const allTargetsExist = targetsPresent.every(Boolean);
-      assert.equal(allTargetsExist, true,
-        `missing target files: ${TARGETS.filter((f, i) => !targetsPresent[i]).join(', ')}`);
-    });
+    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
+    ctx.workspace.unchanged('verify.js', VERIFY_JS);
+    const targetsPresent = TARGETS.map(f => ctx.workspace.exists(f));
+    const allTargetsExist = targetsPresent.every(Boolean);
+    assert.equal(allTargetsExist, true,
+      `missing target files: ${TARGETS.filter((f, i) => !targetsPresent[i]).join(', ')}`);
+    if (ctx.post) assert.equal(
+      ctx.post.status, 0,
+      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
+    );
   });
 });

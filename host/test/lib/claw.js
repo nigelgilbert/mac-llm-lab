@@ -74,10 +74,11 @@ const ERROR_CLASS_PATTERNS = [
   [/(?:^|\s)not exit code 0|exited with code [^0]/i, 'nonzero_exit'],
 ];
 
+/** @returns {Promise<import('./runAgent.js').RunnerResult>} — minimum contract; extra telemetry fields ride along untyped. */
 export function runClaw({
   prompt,
   model,
-  timeoutMs = 240_000,
+  signal,
   extraArgs = [],
 }) {
   return new Promise((resolve, reject) => {
@@ -85,9 +86,11 @@ export function runClaw({
     const runId = randomUUID();
     const runStartedMs = Date.now();
 
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), timeoutMs);
-
+    // Sprint 1.22: cancellation is delegated to the caller's AbortSignal
+    // (typically node:test's t.signal). The harness no longer holds a
+    // setTimeout — node:test's per-test timeout is the single source of truth,
+    // so a single dial governs both the assertion failure ('agent timed out')
+    // and the child reap.
     const child = spawn('claw', args, {
       cwd: WORKSPACE,
       // CLAW_RUN_ID is informational — claw itself does not read it. The
@@ -95,7 +98,7 @@ export function runClaw({
       // assigned harness-side and bridge records are joined by time-window.
       env: { ...process.env, CLAW_RUN_ID: runId },
       stdio: ['ignore', 'pipe', 'pipe'],
-      signal: ac.signal,
+      signal,
       killSignal: 'SIGKILL',
     });
 
@@ -106,15 +109,13 @@ export function runClaw({
 
     child.on('error', (err) => {
       if (err.name === 'AbortError') return;
-      clearTimeout(timer);
       reject(err);
     });
 
-    child.on('close', (code, signal) => {
-      clearTimeout(timer);
+    child.on('close', (code, killSig) => {
       const runFinishedMs = Date.now();
       const elapsedMs = runFinishedMs - runStartedMs;
-      const aborted = ac.signal.aborted;
+      const aborted = !!signal?.aborted;
 
       let extras = { runId };
       if (!TELEMETRY_DISABLED) {
@@ -123,7 +124,6 @@ export function runClaw({
             runId,
             runStartedMs,
             runFinishedMs,
-            timeoutMs,
             code,
             timeout: aborted,
             model,
@@ -159,7 +159,7 @@ export function runClaw({
         });
         return;
       }
-      resolve({ code, signal, stdout, stderr, elapsedMs, ...extras });
+      resolve({ code, signal: killSig, stdout, stderr, elapsedMs, ...extras });
     });
   });
 }
@@ -273,7 +273,6 @@ function collectRunArtifacts({
   runId,
   runStartedMs,
   runFinishedMs,
-  timeoutMs,
   code,
   timeout,
   model,
@@ -480,7 +479,6 @@ function collectRunArtifacts({
     runId,
     runStartedMs,
     runFinishedMs,
-    timeoutMs,
     code,
     timeout,
     model,
@@ -615,7 +613,6 @@ function buildRunSummary({
   runId,
   runStartedMs,
   runFinishedMs,
-  timeoutMs,
   code,
   timeout,
   model,
@@ -666,7 +663,9 @@ function buildRunSummary({
     presence_penalty: floatEnv('SAMPLER_PRESENCE_PENALTY'),
     hardware_instance: process.env.HARDWARE_INSTANCE ?? 'M5',
     concurrency: 1,
-    timeout_ms: timeoutMs,
+    // Sprint 1.22: dropped from runClaw's signature when cancellation moved to
+    // the caller's AbortSignal. Build-run-table.py propagates null through.
+    timeout_ms: null,
     max_iterations: process.env.CLAW_MAX_ITERATIONS ? parseInt(process.env.CLAW_MAX_ITERATIONS, 10) : null,
     run_started_ms: runStartedMs,
     run_finished_ms: runFinishedMs,
