@@ -129,8 +129,7 @@ const PROMPT =
   '  - Empty fields produce empty strings (not undefined).\n' +
   'Then ensure `node verify.js` exits 0. Do not edit verify.js.';
 
-const CLAW_TIMEOUT = 240_000;
-const TIMEOUT = CLAW_TIMEOUT + 20_000;
+const TIMEOUT = 240_000;
 
 describe(`csv-parser: RFC 4180-ish parser (tier=${TIER_LABEL})`, () => {
   it('claw implements parseCSV handling every quoting case', { timeout: TIMEOUT }, async (t) => {
@@ -138,7 +137,7 @@ describe(`csv-parser: RFC 4180-ish parser (tier=${TIER_LABEL})`, () => {
       prompt:     PROMPT,
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
-      clawTimeoutMs:    CLAW_TIMEOUT,
+      clawTimeoutMs:    TIMEOUT,
       testId:  'csv-parser',
       t,
     });

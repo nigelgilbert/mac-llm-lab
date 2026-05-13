@@ -52,8 +52,7 @@ const PROMPT =
   'structurally equal. It should handle primitives, plain objects, and arrays ' +
   'recursively. Then ensure `node verify.js` exits 0. Do not edit verify.js.';
 
-const CLAW_TIMEOUT = 240_000;
-const TIMEOUT = CLAW_TIMEOUT + 20_000;
+const TIMEOUT = 240_000;
 
 describe(`deep-equal: structural equality (tier=${TIER_LABEL})`, () => {
   it('claw implements deep equality including NaN', { timeout: TIMEOUT }, async (t) => {
@@ -61,7 +60,7 @@ describe(`deep-equal: structural equality (tier=${TIER_LABEL})`, () => {
       prompt:     PROMPT,
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
-      clawTimeoutMs:    CLAW_TIMEOUT,
+      clawTimeoutMs:    TIMEOUT,
       testId:  'deep-equal',
       t,
     });

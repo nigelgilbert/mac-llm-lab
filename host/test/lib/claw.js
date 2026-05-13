@@ -91,8 +91,10 @@ export function runClaw({
     // (typically node:test's t.signal). The internal timer must fire first —
     // when only node:test's outer timeout exists, it cancels the test before
     // runAgent's diagnostics can land, so no registry row gets written for
-    // timeout cells. Callers set timeoutMs strictly less than node:test's
-    // per-test timeout (test-body convention: timeout = CLAW_TIMEOUT + 20_000).
+    // timeout cells. runAgent enforces this by subtracting per-call slack
+    // from clawTimeoutMs before passing it here; direct callers (e.g. the
+    // frontier tier tests that call runClaw without runAgent) must keep
+    // timeoutMs strictly less than node:test's per-test timeout themselves.
     const inputs = [];
     if (signal) inputs.push(signal);
     if (typeof timeoutMs === 'number' && timeoutMs > 0) inputs.push(AbortSignal.timeout(timeoutMs));

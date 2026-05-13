@@ -121,8 +121,7 @@ const PROMPT =
   'applies flatten repeatedly until the array contains no nested arrays.\n\n' +
   'Then ensure `node verify.js` exits 0. Do not edit verify.js.';
 
-const CLAW_TIMEOUT = 240_000;
-const TIMEOUT = CLAW_TIMEOUT + 60_000;
+const TIMEOUT = 240_000;
 
 const TARGETS = [
   'pad.js', 'clamp.js', 'unique.js', 'chunk.js',
@@ -136,7 +135,7 @@ describe(`eight-functions: 12 helpers with cross-file deps (tier=${TIER_LABEL})`
       prompt:     PROMPT,
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
-      clawTimeoutMs:    CLAW_TIMEOUT,
+      clawTimeoutMs:    TIMEOUT,
       testId:  'eight-functions',
       t,
     });

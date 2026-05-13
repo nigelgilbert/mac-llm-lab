@@ -73,12 +73,9 @@ const FLUSH_MARGIN_MS = Number(process.env.RUNAGENT_FLUSH_MARGIN_MS) || 3_000;
  * @param {number}                [opts.preconditionTimeoutMs=5000]
  * @param {string|null}           [opts.postScript=null]
  * @param {number}                [opts.postScriptTimeoutMs=5000]
- * @param {number}                [opts.clawTimeoutMs]  claw's nominal budget.
- *   The author sets this equal to the test's `{timeout}` (one constant in two
- *   places). runAgent subtracts a per-call slack — precondition + post-script
- *   timeouts plus FLUSH_MARGIN_MS — and passes the shrunk value to the
- *   runner, so claw aborts in time for runAgent to emit diagnostics before
- *   node:test cancels the test. Throws if clawTimeoutMs <= slack.
+ * @param {number}                [opts.clawTimeoutMs]  Set equal to the test's
+ *   `{timeout}`. runAgent subtracts slack (precondition + post + FLUSH_MARGIN_MS)
+ *   and passes the remainder to the runner. Throws if too small for the slack.
  * @param {string}                opts.testId
  * @param {Runner}                [opts.runner=defaultRunner]
  * @param {import('node:test').TestContext} opts.t  node:test context; runAgent

@@ -321,15 +321,15 @@ All values returned are strings. Do not coerce numbers or booleans.
 
 Then ensure \`node verify.js\` exits 0. Do not edit verify.js.`;
 
-const CLAW_TIMEOUT = 285_000;
+const TIMEOUT = 285_000;
 
 describe(`ini-parser: line-by-line config parser with section reentry (tier=${TIER_LABEL})`, () => {
-  it('claw solves the task', { timeout: CLAW_TIMEOUT + 20_000 }, async (t) => {
+  it('claw solves the task', { timeout: TIMEOUT }, async (t) => {
     const ctx = await runAgent({
       prompt:     PROMPT,
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
-      clawTimeoutMs:    CLAW_TIMEOUT,
+      clawTimeoutMs:    TIMEOUT,
       testId:  'ini-parser',
       t,
     });

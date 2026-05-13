@@ -156,16 +156,16 @@ Your solution must find the true optimum.
 
 Then ensure \`node verify.js\` exits 0. Do not edit verify.js.`;
 
-const CLAW_TIMEOUT = 285_000;
+const TIMEOUT = 285_000;
 
 describe(`book-store: minimum-cost partition with non-greedy trap (tier=${TIER_LABEL})`, () => {
-  it('claw solves the task', { timeout: CLAW_TIMEOUT + 20_000 }, async (t) => {
+  it('claw solves the task', { timeout: TIMEOUT }, async (t) => {
     const ctx = await runAgent({
       prompt:               PROMPT,
       seedFiles:            { 'verify.js': VERIFY_JS },
       postScript:           'verify.js',
       postScriptTimeoutMs:  10_000,
-      clawTimeoutMs:    CLAW_TIMEOUT,
+      clawTimeoutMs:    TIMEOUT,
       testId:            'book-store',
       t,
     });

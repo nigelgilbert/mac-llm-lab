@@ -53,8 +53,7 @@ const PROMPT =
   'converts a string to a URL-friendly slug: lowercase, words separated by ' +
   'single hyphens. Then ensure that `node verify.js` exits 0. Do not edit verify.js.';
 
-const CLAW_TIMEOUT = 240_000;
-const TIMEOUT = CLAW_TIMEOUT + 20_000;
+const TIMEOUT = 240_000;
 
 describe(`adversarial inputs: slugify (tier=${TIER_LABEL})`, () => {
   it('claw implements slugify robustly enough for adversarial inputs', { timeout: TIMEOUT }, async (t) => {
@@ -62,7 +61,7 @@ describe(`adversarial inputs: slugify (tier=${TIER_LABEL})`, () => {
       prompt:     PROMPT,
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
-      clawTimeoutMs:    CLAW_TIMEOUT,
+      clawTimeoutMs:    TIMEOUT,
       testId:  'adversarial-input',
       t,
     });

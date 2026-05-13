@@ -74,8 +74,7 @@ const PROMPT =
   '      • out-of-range fields (e.g. month 13) → message contains "invalid", "month", or "range"\n' +
   'Then ensure `node verify.js` exits 0. Do not edit verify.js.';
 
-const CLAW_TIMEOUT = 180_000;
-const TIMEOUT = CLAW_TIMEOUT + 20_000;
+const TIMEOUT = 180_000;
 
 describe(`parseISO-with-timezone: ISO 8601 parser (tier=${TIER_LABEL})`, () => {
   it('claw implements parseISO with offset handling and invalid-input throws', { timeout: TIMEOUT }, async (t) => {
@@ -83,7 +82,7 @@ describe(`parseISO-with-timezone: ISO 8601 parser (tier=${TIER_LABEL})`, () => {
       prompt:     PROMPT,
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
-      clawTimeoutMs:    CLAW_TIMEOUT,
+      clawTimeoutMs:    TIMEOUT,
       testId:  'parseISO-with-timezone',
       t,
     });

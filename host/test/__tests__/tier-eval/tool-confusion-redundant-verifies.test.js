@@ -96,8 +96,7 @@ const PROMPT =
   '  - Empty value (`flag=`) → `{ flag: "" }`.\n\n' +
   'Then ensure `node verify.js` exits 0. Do not edit verify.js, check.js, or validate.js.';
 
-const CLAW_TIMEOUT = 180_000;
-const TIMEOUT = CLAW_TIMEOUT + 20_000;
+const TIMEOUT = 180_000;
 
 describe(`tool-confusion-redundant-verifies: parse() with red-herring verifiers (tier=${TIER_LABEL})`, () => {
   it('claw implements parse against verify.js, ignoring red-herring verifiers', { timeout: TIMEOUT }, async (t) => {
@@ -109,7 +108,7 @@ describe(`tool-confusion-redundant-verifies: parse() with red-herring verifiers 
         'validate.js': VALIDATE_JS,
       },
       postScript: 'verify.js',
-      clawTimeoutMs:    CLAW_TIMEOUT,
+      clawTimeoutMs:    TIMEOUT,
       testId:  'tool-confusion-redundant-verifies',
       t,
     });

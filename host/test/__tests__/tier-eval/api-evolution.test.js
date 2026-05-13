@@ -60,8 +60,7 @@ const PROMPT =
   'call sites pass arguments in the new order, and ensure that running ' +
   '`node app.js` exits 0. Do not change the assertions in app.js.';
 
-const CLAW_TIMEOUT = 240_000;
-const TIMEOUT = CLAW_TIMEOUT + 60_000;
+const TIMEOUT = 240_000;
 
 describe(`api evolution: signature reorder across two files (tier=${TIER_LABEL})`, () => {
   it('claw reorders the signature and updates the call site', { timeout: TIMEOUT }, async (t) => {
@@ -70,7 +69,7 @@ describe(`api evolution: signature reorder across two files (tier=${TIER_LABEL})
       seedFiles:            { 'pricing.js': PRICING_JS, 'app.js': APP_JS },
       preconditionMustFail: 'app.js',
       postScript:           'app.js',
-      clawTimeoutMs:    CLAW_TIMEOUT,
+      clawTimeoutMs:    TIMEOUT,
       testId:            'api-evolution',
       t,
     });

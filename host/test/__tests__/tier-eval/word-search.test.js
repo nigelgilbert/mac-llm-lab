@@ -458,10 +458,10 @@ Construction guarantees (so you can sanity-check your code):
 
 Then ensure \`node verify.js\` exits 0. Do not edit verify.js, board.txt, or anchors.json.`;
 
-const CLAW_TIMEOUT = 285_000;
+const TIMEOUT = 285_000;
 
 describe(`word-search v2.1: dual-anchor multi-match enumeration (tier=${TIER_LABEL})`, () => {
-  it('claw solves the task', { timeout: CLAW_TIMEOUT + 20_000 }, async (t) => {
+  it('claw solves the task', { timeout: TIMEOUT }, async (t) => {
     const ctx = await runAgent({
       prompt:     PROMPT,
       seedFiles:  {
@@ -470,7 +470,7 @@ describe(`word-search v2.1: dual-anchor multi-match enumeration (tier=${TIER_LAB
         'anchors.json': ANCHORS_JSON,
       },
       postScript: 'verify.js',
-      clawTimeoutMs:    CLAW_TIMEOUT,
+      clawTimeoutMs:    TIMEOUT,
       testId:  'word-search',
       t,
     });

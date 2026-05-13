@@ -102,8 +102,7 @@ const PROMPT =
   'use the existing DEFAULT_CURRENCY constant. After your edits, running ' +
   '`node test.js` must exit 0. Do not edit test.js.';
 
-const CLAW_TIMEOUT = 240_000;
-const TIMEOUT = CLAW_TIMEOUT + 60_000;
+const TIMEOUT = 240_000;
 
 describe(`large-refactor: thread currency through 5 call sites (tier=${TIER_LABEL})`, () => {
   it('claw threads the new parameter through every caller', { timeout: TIMEOUT }, async (t) => {
@@ -112,7 +111,7 @@ describe(`large-refactor: thread currency through 5 call sites (tier=${TIER_LABE
       seedFiles:            { 'format.js': FORMAT_JS, 'cart.js': CART_JS, 'receipt.js': RECEIPT_JS, 'report.js': REPORT_JS, 'test.js': TEST_JS },
       preconditionMustFail: 'test.js',
       postScript:           'test.js',
-      clawTimeoutMs:    CLAW_TIMEOUT,
+      clawTimeoutMs:    TIMEOUT,
       testId:            'large-refactor',
       t,
     });

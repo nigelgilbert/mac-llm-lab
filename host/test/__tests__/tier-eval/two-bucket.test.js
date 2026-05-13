@@ -213,15 +213,15 @@ Worked example for \`findShortestPath(3, 8, 5, 'A')\`:
 
 Then ensure \`node verify.js\` exits 0. Do not edit verify.js.`;
 
-const CLAW_TIMEOUT = 285_000;
+const TIMEOUT = 285_000;
 
 describe(`two-bucket: shortest-path BFS with explicit path reconstruction (tier=${TIER_LABEL})`, () => {
-  it('claw solves the task', { timeout: CLAW_TIMEOUT + 20_000 }, async (t) => {
+  it('claw solves the task', { timeout: TIMEOUT }, async (t) => {
     const ctx = await runAgent({
       prompt:     PROMPT,
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
-      clawTimeoutMs:    CLAW_TIMEOUT,
+      clawTimeoutMs:    TIMEOUT,
       testId:  'two-bucket',
       t,
     });

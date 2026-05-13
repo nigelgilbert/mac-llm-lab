@@ -53,16 +53,16 @@ const PROMPT =
   'buggy.js has a bug that causes its own assertion to fail. ' +
   'Find and fix the bug so that running `node buggy.js` exits 0.';
 
-const CLAW_TIMEOUT = 240_000;
+const TIMEOUT = 240_000;
 
 describe(`refactor: fix seeded off-by-one (tier=${TIER_LABEL})`, () => {
-  it('claw fixes buggy.js so its assertions pass', { timeout: CLAW_TIMEOUT + 20_000 }, async (t) => {
+  it('claw fixes buggy.js so its assertions pass', { timeout: TIMEOUT }, async (t) => {
     const ctx = await runAgent({
       prompt:               PROMPT,
       seedFiles:            { 'buggy.js': BUGGY_JS },
       preconditionMustFail: 'buggy.js',
       postScript:           'buggy.js',
-      clawTimeoutMs:    CLAW_TIMEOUT,
+      clawTimeoutMs:    TIMEOUT,
       testId:            'refactor',
       t,
     });

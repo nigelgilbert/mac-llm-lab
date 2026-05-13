@@ -450,10 +450,10 @@ test.js, format-config.js, currency-config.js, or format-parse.js.
 Files notify.js, helper.js, and constants.js are distractors that do NOT
 call formatPrice — leave them alone.`;
 
-const CLAW_TIMEOUT = 285_000;
+const TIMEOUT = 285_000;
 
 describe(`twelve-file-refactor: thread two params through 7 call sites in 12 files (tier=${TIER_LABEL})`, () => {
-  it('claw threads two parameters through every caller', { timeout: CLAW_TIMEOUT + 20_000 }, async (t) => {
+  it('claw threads two parameters through every caller', { timeout: TIMEOUT }, async (t) => {
     const ctx = await runAgent({
       prompt:               PROMPT,
       seedFiles:            {
@@ -475,7 +475,7 @@ describe(`twelve-file-refactor: thread two params through 7 call sites in 12 fil
       },
       preconditionMustFail: 'test.js',
       postScript:           'test.js',
-      clawTimeoutMs:    CLAW_TIMEOUT,
+      clawTimeoutMs:    TIMEOUT,
       testId:            'twelve-file-refactor',
       t,
     });
