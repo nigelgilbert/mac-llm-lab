@@ -334,6 +334,9 @@ ROW_COUNT=$(wc -l < "$REGISTRY_PATH" 2>/dev/null || echo 0)
 log ""
 log "==> diffing observed JSONL vs expected manifest..."
 DIFF_OUT="$TEST_DIR/.claw-runtime/expected_attempts.${SWEEP_LABEL}.diff.txt"
+# pipefail so `tee` doesn't mask the diff's non-zero exit and the WARN actually
+# fires when observed diverges from expected.
+set -o pipefail
 docker run --rm \
   -v "$TEST_DIR:/test" \
   -w /test \
@@ -343,6 +346,7 @@ docker run --rm \
     --registry "/test/.claw-runtime/$(basename "$REGISTRY_PATH")" \
   | tee "$DIFF_OUT" \
   || log "WARN: observed diverged from expected; see $DIFF_OUT"
+set +o pipefail
 
 log ""
 log "==> done"
