@@ -81,8 +81,7 @@ const PROMPT =
   '  - formatTime(0)    → ""          (empty string for zero duration)\n' +
   'Then ensure `node verify.js` exits 0. Do not edit verify.js.';
 
-const CLAW_TIMEOUT = 180_000;
-const TIMEOUT = CLAW_TIMEOUT + 20_000;
+const TIMEOUT = 180_000;
 
 describe(`subtle-broken-spec: formatTime with prompt/verify mismatch (tier=${TIER_LABEL})`, () => {
   it('claw implements formatTime to match verify (despite suggestive prompt)', { timeout: TIMEOUT }, async (t) => {
@@ -90,7 +89,7 @@ describe(`subtle-broken-spec: formatTime with prompt/verify mismatch (tier=${TIE
       prompt:     PROMPT,
       seedFiles:  { 'verify.js': VERIFY_JS },
       postScript: 'verify.js',
-      clawTimeoutMs:    CLAW_TIMEOUT,
+      clawTimeoutMs:    TIMEOUT,
       testId:  'subtle-broken-spec',
       t,
     });
