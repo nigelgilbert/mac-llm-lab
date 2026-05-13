@@ -29,7 +29,11 @@ fi
 echo "running ${#matches[@]} test file(s):" >&2
 printf '  %s\n' "${matches[@]}" >&2
 
+# Mount the whole __tests__ tree (not just __tests__/lib) so the matched
+# files we found on the host are the ones executed in the container —
+# otherwise a newly-added or edited test on the host would either silently
+# run a stale copy from the image or fail to resolve.
 docker compose run --rm \
-  -v "$PWD/__tests__/lib:/test/__tests__/lib" \
+  -v "$PWD/__tests__:/test/__tests__" \
   -v "$PWD/lib:/test/lib" \
   --entrypoint node test --test "$@" "${matches[@]}"
