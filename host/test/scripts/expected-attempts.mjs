@@ -31,6 +31,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const HEADER = 'test_id,hardware_tier,rep_index';
 
@@ -59,7 +60,7 @@ function printHelp() {
   node expected-attempts.mjs diff --expected <csv> --registry <jsonl>`);
 }
 
-function isEmitEligible(filePath) {
+export function isEmitEligible(filePath) {
   // A tier-eval test produces a registry row iff its source references one of
   // the two registry-writing entry points: the lib/runAgent.js helper (Sprint
   // 1.22, ex-runAgentSetup) or the underlying writeAssertionResult primitive
@@ -190,12 +191,19 @@ function diffCmd(opts) {
   process.exit(missing.length === 0 && extras.length === 0 ? 0 : 1);
 }
 
-const { cmd, opts } = parseArgs(process.argv);
-try {
-  if (cmd === 'plan') planCmd(opts);
-  else if (cmd === 'diff') diffCmd(opts);
-  else { printHelp(); process.exit(2); }
-} catch (e) {
-  console.error(`error: ${e.message}`);
-  process.exit(2);
+// Main guard — only run the CLI when this file is the entry point. Imports
+// from unit tests (host/test/__tests__/scripts/expected-attempts.test.js) hit
+// this module for `isEmitEligible`; without the guard, parseArgs would consume
+// the test runner's argv and exit non-zero.
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  const { cmd, opts } = parseArgs(process.argv);
+  try {
+    if (cmd === 'plan') planCmd(opts);
+    else if (cmd === 'diff') diffCmd(opts);
+    else { printHelp(); process.exit(2); }
+  } catch (e) {
+    console.error(`error: ${e.message}`);
+    process.exit(2);
+  }
 }
