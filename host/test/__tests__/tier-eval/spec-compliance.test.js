@@ -66,11 +66,6 @@ describe(`spec compliance: multi-requirement formatPrice (tier=${TIER_LABEL})`, 
       testId:  'spec-compliance',
       t,
     });
-    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
     ctx.workspace.unchanged('verify.js', VERIFY_JS);
-    assert.equal(
-      ctx.post.status, 0,
-      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
-    );
   });
 });

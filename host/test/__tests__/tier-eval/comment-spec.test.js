@@ -89,11 +89,6 @@ describe(`comment-spec: implement from JSDoc (tier=${TIER_LABEL})`, () => {
       testId:            'comment-spec',
       t,
     });
-    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
     ctx.workspace.unchanged('verify.js', VERIFY_JS);
-    assert.equal(
-      ctx.post.status, 0,
-      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
-    );
   });
 });

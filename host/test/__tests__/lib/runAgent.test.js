@@ -265,6 +265,71 @@ describe('runAgent ITER_DIST_TEST_ID env restoration', () => {
   });
 });
 
+describe('runAgent pass oracle — workspace-only (issue #001)', () => {
+  function makeTCapture() {
+    const diagnostics = [];
+    return {
+      t: { signal: new AbortController().signal, diagnostic: (m) => diagnostics.push(m) },
+      diagnostics,
+    };
+  }
+  // Stub runner returning a caller-chosen exit code; never touches the
+  // workspace, so the seeded post.js is what the oracle actually runs.
+  const runnerExiting = (code) => async () =>
+    ({ code, stdout: '', stderr: 'agent-noise', elapsedMs: 1, runDir: '/tmp/none' });
+
+  it('passes when post.status===0 even if the agent exited non-zero', async () => {
+    const { t, diagnostics } = makeTCapture();
+    const ctx = await runAgent({
+      ...BASE,
+      seedFiles: { 'post.js': 'process.exit(0)\n' },
+      postScript: 'post.js',
+      clawTimeoutMs: 60_000,
+      t,
+      runner: runnerExiting(7), // agent "crashed"
+    });
+    assert.equal(ctx.post.status, 0);
+    // Crash is recorded as telemetry, and the sentinel still lands last.
+    assert.ok(diagnostics.some((d) => d.startsWith('crashed_before_finishing=1 agent_code=7')));
+    assert.equal(diagnostics.at(-1), 'runAgent_done=1');
+  });
+
+  it('fails when post.status!==0 even though the agent exited 0', async () => {
+    const { t, diagnostics } = makeTCapture();
+    await assert.rejects(
+      () => runAgent({
+        ...BASE,
+        seedFiles: { 'post.js': 'process.exit(1)\n' },
+        postScript: 'post.js',
+        clawTimeoutMs: 60_000,
+        t,
+        runner: runnerExiting(0),
+      }),
+      /post-script failed/,
+    );
+    // Sentinel emitted BEFORE the throw, so the registry row is still written;
+    // post_result carries the failing status for the reporter.
+    assert.equal(diagnostics.at(-1), 'runAgent_done=1');
+    const post = diagnostics.find((d) => d.startsWith('post_result='));
+    assert.match(post, /"status":1/);
+    // A clean agent exit emits no crash diagnostic.
+    assert.equal(diagnostics.some((d) => d.startsWith('crashed_before_finishing')), false);
+  });
+
+  it('emits no_workspace_oracle=1 and does not throw when there is no post-script', async () => {
+    const { t, diagnostics } = makeTCapture();
+    await assert.doesNotReject(() => runAgent({
+      ...BASE,
+      postScript: null,
+      clawTimeoutMs: 60_000,
+      t,
+      runner: runnerExiting(0),
+    }));
+    assert.ok(diagnostics.includes('no_workspace_oracle=1'));
+    assert.equal(diagnostics.at(-1), 'runAgent_done=1');
+  });
+});
+
 describe('runAgent at-most-once per TestContext', () => {
   it('throws on a second call with the same `t`', async () => {
     const t = makeT();

@@ -479,7 +479,6 @@ describe(`twelve-file-refactor: thread two params through 7 call sites in 12 fil
       testId:            'twelve-file-refactor',
       t,
     });
-    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
     ctx.workspace.unchanged('test.js', TEST_JS);
     ctx.workspace.unchanged('format-config.js', FORMAT_CONFIG_JS);
     ctx.workspace.unchanged('currency-config.js', CURRENCY_CONFIG_JS);
@@ -487,9 +486,5 @@ describe(`twelve-file-refactor: thread two params through 7 call sites in 12 fil
     ctx.workspace.unchanged('notify.js', NOTIFY_JS);
     ctx.workspace.unchanged('helper.js', HELPER_JS);
     ctx.workspace.unchanged('constants.js', CONSTANTS_JS);
-    assert.equal(
-      ctx.post.status, 0,
-      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
-    );
   });
 });

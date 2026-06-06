@@ -13,10 +13,17 @@
 // Test-body shape:
 //   it(name, { timeout }, async (t) => {
 //     const ctx = await runAgent({ ...SETUP, t });
-//     assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
-//     // per-test invariants
-//     if (ctx.post) assert.equal(ctx.post.status, 0, `…stderr…`);
+//     // per-test invariants only (e.g. ctx.workspace.unchanged(...)).
 //   });
+//
+// Pass oracle (issue #001): runAgent decides pass ONCE, centrally — the
+// `/workspace` post-script exiting 0 (`post.status === 0`), config-agnostic so
+// it means the same thing under claw or OpenCode. The agent exit code is NOT a
+// pass gate (a claw-ism that would false-fail an OpenCode run which fixed the
+// workspace but returned a noisy code); it survives only as telemetry plus a
+// `crashed_before_finishing` diagnostic. Test bodies therefore no longer assert
+// `agent.code`/`post.status`; they keep just their per-test invariants. See
+// host/test/docs/OPENCODE-HARNESS-AB-PLAN.md §0b.
 //
 // runAgent receives the TestContext directly because t.diagnostic uses private
 // instance fields — destructuring (`{ diagnostic } = t`) loses the `this`
@@ -207,10 +214,43 @@ export async function runAgent({
       })}`);
     }
 
-    // Sentinel for the registry reporter's per-test flush. Must be the last
-    // diagnostic this function emits; the reporter writes the sidecar +
-    // deletes the pending entry on receipt. See registry-reporter.js.
+    // Agent exit code: telemetry, NOT a pass gate (issue #001). It already
+    // rides in the agent_result diagnostic above (→ registry `claw_exit` +
+    // `terminal_status`). A non-zero code means the agent crashed before
+    // finishing; surface it as a diagnostic, but let the workspace oracle have
+    // the final say on pass — claw exits 0 on success, but `opencode run`'s
+    // exit semantics are unconfirmed and could false-fail a correct workspace.
+    // (null code = timeout/abort, already carried by terminal_status; not a
+    // "crash".)
+    if (typeof agent.code === 'number' && agent.code !== 0) {
+      t.diagnostic(`crashed_before_finishing=1 agent_code=${agent.code}`);
+    }
+    // A test with no post-script has no `/workspace` oracle and is not
+    // A/B-eligible (issue #001 AC): flag it rather than letting it silently
+    // "pass". Emitted before the sentinel so it lands in the same flush.
+    if (!post) {
+      t.diagnostic('no_workspace_oracle=1');
+    }
+
+    // Sentinel for the registry reporter's per-test flush. Emitted BEFORE the
+    // pass assertion so the sidecar/registry row is written for fails too (the
+    // reporter derives `passed` from node:test's own verdict, and post_result
+    // already carries the status). Must be the LAST diagnostic this function
+    // emits; the reporter writes the sidecar + deletes the pending entry on
+    // receipt. See registry-reporter.js.
     t.diagnostic('runAgent_done=1');
+
+    // Centralized pass oracle (issue #001): pass ⇔ the `/workspace` post-script
+    // exited 0. Decided here once rather than re-asserted in each of the ~35
+    // test bodies. Throws on failure (the assertion carries no diagnostic, so
+    // runAgent_done stays the final diagnostic). When there is no post-script
+    // the verdict is left to the body's own per-test invariants.
+    if (post) {
+      assert.equal(
+        post.status, 0,
+        `post-script failed:\n${post.stderr.slice(0, 800)}`,
+      );
+    }
 
     return { agent, workspace, post };
   } finally {

@@ -66,6 +66,13 @@ function printHeader(pending) {
   if (pending.agent_result) {
     const a = pending.agent_result;
     console.log(`  agent: exit=${a.code} elapsed=${a.elapsedMs}ms files=${JSON.stringify(a.files ?? [])}`);
+    // Exit code is telemetry, not a pass gate (issue #001): a non-zero,
+    // non-null code means the agent crashed before finishing. The workspace
+    // post-script still decides PASS/FAIL above; surface the crash so a
+    // workspace-passed-but-agent-crashed run is visible rather than silent.
+    if (typeof a.code === 'number' && a.code !== 0) {
+      console.log(`  ⚠ agent crashed before finishing (exit=${a.code}); workspace oracle still decided the verdict`);
+    }
     if (a.code !== 0 && a.stderrTail) {
       console.log(`  agent stderr (tail):\n${a.stderrTail}`);
     }
