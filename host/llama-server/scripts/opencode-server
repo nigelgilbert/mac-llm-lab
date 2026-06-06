@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+# ============================================================================
+# opencode-server — start/stop/health for the SECOND, OpenCode-dedicated
+# llama-server (Config B of the OpenCode A/B plan, issue #005).
+#
+# Serves the SAME tier-64 GGUF as the production claw server, but with
+# OpenCode's serving config:
+#   --jinja + the vendored corrected template (system-not-first fix, #004)
+#   NO claw.gbnf grammar  (Config B uses native <tool_call> parsing)
+#   thinking-off via --chat-template-kwargs '{"enable_thinking":false}'
+#   tier-64 sampler (mirrored from models.conf / the claw launchd plist)
+#   generous -n so tool-call args don't truncate
+#
+# It runs on its OWN port (:11436) and as its OWN background process, so it
+# NEVER touches the production claw launchd on :11435 or LiteLLM on :4000.
+# Start/stop is fully scriptable (no interactive steps) for the phase-swap
+# driver (#013).
+#
+# Usage:
+#   ./scripts/opencode-server start      # boot in background, wait for /health
+#   ./scripts/opencode-server stop       # kill the background process
+#   ./scripts/opencode-server restart
+#   ./scripts/opencode-server status     # pid + /health
+#   ./scripts/opencode-server health     # exit 0 iff /health is green
+#   ./scripts/opencode-server probe      # /apply-template: assert the #004 fix
+#                                        #   + closed <think></think> prefill
+#   ./scripts/opencode-server install    # OPTIONAL: render+bootstrap a launchd
+#   ./scripts/opencode-server uninstall  #   plist for login-persistent serving
+#
+# The boot incantation mirrors the known-good non-grammar boot in
+# templates/verify-template.sh (same build, 5594d13).
+# ============================================================================
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$SCRIPT_DIR/.."
+
+# --- Fixed identity for this dedicated server ------------------------------
+TIER=64                                   # tier-64 dedicated (tier-16 is #018)
+PORT="${OPENCODE_LLAMA_PORT:-11436}"      # own port; avoids claw :11435, LiteLLM :4000
+HOST_BIND="${OPENCODE_LLAMA_HOST:-0.0.0.0}"  # 0.0.0.0 so docker reaches via host.docker.internal
+ALIAS=opencode
+BASE="http://127.0.0.1:$PORT"
+BINARY="${LLAMA_SERVER:-$HOME/.local/bin/llama-server}"
+TEMPLATE="$ROOT/templates/qwen36-corrected.jinja"
+LOG="${OPENCODE_LLAMA_LOG:-/tmp/opencode-llama-server.log}"
+PIDFILE="${OPENCODE_LLAMA_PIDFILE:-/tmp/opencode-llama-server.pid}"
+NPREDICT="${OPENCODE_LLAMA_NPREDICT:-8192}"   # generous -n: avoid tool-call arg truncation
+HEALTH_TIMEOUT="${OPENCODE_LLAMA_HEALTH_TIMEOUT:-180}"  # 21 GB model load is slow
+
+# launchd (optional, login-persistent path)
+LABEL="com.mac-llm-lab.opencode-server"
+PLIST_TEMPLATE="$ROOT/launchd/$LABEL.plist"
+PLIST_DEST="$HOME/Library/LaunchAgents/$LABEL.plist"
+
+# --- tier-64 sampler + ctx/batch from models.conf (single source of truth) --
+# shellcheck source=../models.conf
+source "$ROOT/models.conf"
+eval "GGUF=\"\$TIER_${TIER}_GGUF\""
+eval "CTX=\"\$TIER_${TIER}_CTX\""
+eval "BATCH=\"\$TIER_${TIER}_BATCH\""
+eval "TEMP=\"\$TIER_${TIER}_TEMP\""
+eval "TOP_P=\"\$TIER_${TIER}_TOP_P\""
+eval "TOP_K=\"\$TIER_${TIER}_TOP_K\""
+eval "REPEAT_PENALTY=\"\$TIER_${TIER}_REPEAT_PENALTY\""
+eval "PRESENCE_PENALTY=\"\$TIER_${TIER}_PRESENCE_PENALTY\""
+
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+preflight() {
+  [[ -x "$BINARY" ]] || die "llama-server not found/executable: $BINARY"
+  [[ -f "$GGUF"   ]] || die "tier-${TIER} GGUF not found: $GGUF (see models.conf)"
+  [[ -f "$TEMPLATE" ]] || die "corrected template missing: $TEMPLATE (#004)"
+  for v in CTX BATCH TEMP TOP_P TOP_K REPEAT_PENALTY PRESENCE_PENALTY; do
+    [[ -n "${!v}" ]] || die "TIER_${TIER}_${v} not set in models.conf"
+  done
+}
+
+http_code() { curl -s -o /dev/null -w '%{http_code}' "$1" 2>/dev/null || echo 000; }
+is_green()  { [[ "$(http_code "$BASE/health")" == 200 ]]; }
+
+running_pid() {
+  [[ -f "$PIDFILE" ]] || return 1
+  local pid; pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && { echo "$pid"; return 0; }
+  return 1
+}
+
+# The non-grammar boot incantation — same shape as verify-template.sh boot(),
+# extended with the tier-64 sampler, thinking-off kwarg, and generous -n.
+cmd_start() {
+  preflight
+  if running_pid >/dev/null; then
+    echo "already running (pid $(running_pid)) on :$PORT"; cmd_health; return 0
+  fi
+  if lsof -nP -iTCP:"$PORT" 2>/dev/null | grep -q LISTEN; then
+    die "port $PORT already in use (refusing to touch it — is claw on the wrong port?)"
+  fi
+
+  echo "starting opencode-server (tier-${TIER}, $(basename "$GGUF")) on :$PORT"
+  # NOTE: --chat-template-kwargs is deprecated-but-functional on build 5594d13
+  # (warning only; --reasoning off is the startup-only alternative). Kept for
+  # parity with the setup-guide recipe — see templates/README.md "Notes for #005".
+  nohup "$BINARY" \
+    --host "$HOST_BIND" --port "$PORT" \
+    --model "$GGUF" --alias "$ALIAS" \
+    --ctx-size "$CTX" -ngl 999 -fa on \
+    --cache-type-k q8_0 --cache-type-v q8_0 \
+    --batch-size "$BATCH" \
+    --temp "$TEMP" --top-p "$TOP_P" --top-k "$TOP_K" \
+    --repeat-penalty "$REPEAT_PENALTY" --presence-penalty "$PRESENCE_PENALTY" \
+    --repeat-last-n 256 \
+    --jinja --chat-template-file "$TEMPLATE" \
+    --chat-template-kwargs '{"enable_thinking":false}' \
+    -n "$NPREDICT" \
+    --metrics \
+    > "$LOG" 2>&1 &
+  echo $! > "$PIDFILE"
+  echo "  pid $(cat "$PIDFILE"), log $LOG"
+
+  for _ in $(seq 1 "$HEALTH_TIMEOUT"); do
+    if ! kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+      echo "process died during startup; log tail:" >&2; tail -20 "$LOG" >&2; rm -f "$PIDFILE"; exit 2
+    fi
+    is_green && { echo "  /health green on :$PORT"; return 0; }
+    sleep 1
+  done
+  die "server did not reach green /health within ${HEALTH_TIMEOUT}s; log tail: $(tail -5 "$LOG")"
+}
+
+cmd_stop() {
+  local pid stopped=0
+  if pid="$(running_pid)"; then kill "$pid" 2>/dev/null || true; stopped=1; fi
+  # also reap any orphan we own on this exact port (pidfile lost), never touching :11435
+  rm -f "$PIDFILE"
+  if [[ "$stopped" == 1 ]]; then echo "stopped opencode-server (was pid $pid)"; else echo "not running"; fi
+}
+
+cmd_status() {
+  if pid="$(running_pid)"; then echo "process: running (pid $pid) on :$PORT"
+  else echo "process: not running"; fi
+  if is_green; then echo "health : green ($BASE/health)"
+  else echo "health : unreachable ($BASE/health)"; fi
+}
+
+cmd_health() { if is_green; then echo "green: $BASE/health"; else echo "unreachable: $BASE/health"; exit 1; fi; }
+
+# /apply-template probe — proves the live server carries the #004 system-not-first
+# fix AND the closed <think></think> thinking-off prefill. Template-only (no GPU).
+cmd_probe() {
+  is_green || die "server not green on :$PORT — start it first"
+  local body out fails=0
+  # 1) system-not-first: system content must survive and emit an <|im_start|>system block
+  body='{"messages":[{"role":"user","content":"hi"},{"role":"system","content":"SYSTEM_SENTINEL_42"},{"role":"user","content":"2+2?"}]}'
+  out="$(curl -s -X POST "$BASE/apply-template" -H 'content-type: application/json' -d "$body" \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin).get("prompt",""))' 2>/dev/null || true)"
+  if [[ "$out" == *"SYSTEM_SENTINEL_42"* && "$out" == *"<|im_start|>system"* ]]; then
+    echo "  PASS  system-not-first fix (#004): system content preserved + <|im_start|>system emitted"
+  else
+    echo "  FAIL  system-not-first fix (#004): system content dropped"; fails=$((fails+1))
+  fi
+  # 2) thinking-off: server's launch-time enable_thinking:false default must yield a
+  #    CLOSED <think>\n\n</think> prefill for a plain request (no per-request kwargs).
+  body='{"messages":[{"role":"user","content":"hi"}]}'
+  out="$(curl -s -X POST "$BASE/apply-template" -H 'content-type: application/json' -d "$body" \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin).get("prompt",""))' 2>/dev/null || true)"
+  if [[ "$out" == *$'<think>\n\n</think>'* ]]; then
+    echo "  PASS  thinking-off: closed <think></think> prefill (enable_thinking:false in effect)"
+  else
+    echo "  FAIL  thinking-off: no closed <think></think> prefill"; fails=$((fails+1))
+  fi
+  [[ "$fails" -eq 0 ]] || die "$fails probe check(s) failed"
+  echo "probe: all checks passed"
+}
+
+# --- optional launchd path (login-persistent) ------------------------------
+cmd_install() {
+  preflight
+  [[ -f "$PLIST_TEMPLATE" ]] || die "plist template missing: $PLIST_TEMPLATE"
+  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+  mkdir -p "$HOME/Library/LaunchAgents"
+  sed \
+    -e "s|__BINARY__|$BINARY|g" \
+    -e "s|__GGUF_PATH__|$GGUF|g" \
+    -e "s|__TEMPLATE_PATH__|$(cd "$(dirname "$TEMPLATE")" && pwd)/$(basename "$TEMPLATE")|g" \
+    -e "s|__CTX_SIZE__|$CTX|g" \
+    -e "s|__BATCH_SIZE__|$BATCH|g" \
+    -e "s|__NPREDICT__|$NPREDICT|g" \
+    -e "s|__TEMP__|$TEMP|g" \
+    -e "s|__TOP_P__|$TOP_P|g" \
+    -e "s|__TOP_K__|$TOP_K|g" \
+    -e "s|__REPEAT_PENALTY__|$REPEAT_PENALTY|g" \
+    -e "s|__PRESENCE_PENALTY__|$PRESENCE_PENALTY|g" \
+    "$PLIST_TEMPLATE" > "$PLIST_DEST"
+  launchctl bootstrap "gui/$(id -u)" "$PLIST_DEST"
+  echo "installed+started: $LABEL on :$PORT (model load ~10–20s)"
+}
+
+cmd_uninstall() {
+  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+  echo "uninstalled: $LABEL"
+}
+
+case "${1:-}" in
+  start)     cmd_start ;;
+  stop)      cmd_stop ;;
+  restart)   cmd_stop; cmd_start ;;
+  status)    cmd_status ;;
+  health)    cmd_health ;;
+  probe)     cmd_probe ;;
+  install)   cmd_install ;;
+  uninstall) cmd_uninstall ;;
+  *) echo "usage: $(basename "$0") {start|stop|restart|status|health|probe|install|uninstall}" >&2; exit 1 ;;
+esac

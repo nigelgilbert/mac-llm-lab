@@ -155,6 +155,13 @@ Last run (this commit) — **13 passed, 0 failed**:
 
 ## Notes for #005 (serving) and #006 (tool-call validation)
 
+- **#005 serving is implemented** — the second, OpenCode-dedicated `llama-server`
+  (tier-64, `:11436`) is brought up/down by
+  [`../scripts/opencode-server`](../scripts/opencode-server)
+  (`start|stop|status|health|probe`; `install`/`uninstall` for a login-persistent
+  launchd agent — [`com.mac-llm-lab.opencode-server.plist`](../launchd/com.mac-llm-lab.opencode-server.plist)).
+  `opencode-server probe` re-asserts the system-not-first fix and the closed
+  `<think></think>` thinking-off prefill against the live server via `/apply-template`.
 - Launch with `--jinja --chat-template-file .../qwen36-corrected.jinja` and **no
   `claw.gbnf`** (Config B uses native `<tool_call>` parsing, not the grammar).
 - Thinking-off is set at serve time via `--chat-template-kwargs '{"enable_thinking":false}'`
