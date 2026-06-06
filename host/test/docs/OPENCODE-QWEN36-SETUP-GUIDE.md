@@ -54,7 +54,7 @@ strict OpenAI compat. [llama.cpp#20198]
 llama-server \
   --model "$HOME/.ollama/gguf/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf" \
   --jinja \
-  --chat-template-file ~/.config/llama/qwen36-corrected.jinja \
+  --chat-template-file host/llama-server/templates/qwen36-corrected.jinja \
   --chat-template-kwargs '{"enable_thinking":false}' \
   --host 127.0.0.1 --port 8080 \
   --ctx-size 65536 --batch-size 4096 --flash-attn on \
@@ -84,7 +84,13 @@ llama-server \
 
 ## Open questions to resolve in the ticket
 
-- Source/pin a known-good corrected Qwen3.6 Jinja template; vendor it in-repo.
+- ~~Source/pin a known-good corrected Qwen3.6 Jinja template; vendor it in-repo.~~
+  **DONE (#004):** vendored at `host/llama-server/templates/qwen36-corrected.jinja`
+  with provenance + exact fix + an on-hardware verifier — see that dir's
+  [README](../../llama-server/templates/README.md). On our build the stock failure
+  mode is a silently-**dropped** system message (HTTP 200), not the HTTP 500 the
+  community sources reported on the upstream variant; the corrected template fixes
+  both.
 - Confirm our llama.cpp build honors `enable_thinking` kwargs and does not hit the
   [#20198] args-type regression.
 - Thinking-off costs reasoning quality but buys tool reliability — flag as a
