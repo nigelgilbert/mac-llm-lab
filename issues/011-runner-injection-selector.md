@@ -2,8 +2,9 @@
 
 **Type**: AFK
 
-**Status:** ✅ Done — selector + cross-container `/workspace` sharing landed; full
-lib suite green (103/103) + live cross-container round-trip passes against oc-64.
+**Status:** ✅ Done — 1736f7c — selector + cross-container `/workspace` sharing
+landed; full lib suite green (103/103) + live cross-container round-trip passes
+against oc-64.
 
 ## Parent
 
