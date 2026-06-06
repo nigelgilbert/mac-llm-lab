@@ -158,4 +158,30 @@ describe('dockerComposeArgv: argv construction', () => {
     assert.ok(args.includes('--name'));
     assert.equal(args.at(-1), 'p');
   });
+
+  it('injects the #021 DB bind mount as a `run` option (before the service)', () => {
+    const { args } = dockerComposeArgv({
+      composeFile: '/repo/docker-compose.yml',
+      containerName: 'oc-run-abc',
+      prompt: 'do a thing',
+      dataMount: { hostPath: '/host/run/opencode-data', containerPath: '/root/.local/share/opencode' },
+    });
+    const vIdx = args.indexOf('-v');
+    const svcIdx = args.indexOf('opencode');
+    assert.ok(vIdx > 0, '-v present');
+    assert.equal(args[vIdx + 1], '/host/run/opencode-data:/root/.local/share/opencode');
+    // The mount must precede the SERVICE name, else docker treats it as a cmd arg.
+    assert.ok(vIdx < svcIdx, '-v must come before the service name');
+    // Still the one-shot run shape afterward.
+    assert.deepEqual(args.slice(svcIdx), ['opencode', 'opencode', 'run', 'do a thing']);
+  });
+
+  it('omits the bind mount when no dataMount is given (pre-#021 argv)', () => {
+    const { args } = dockerComposeArgv({
+      composeFile: '/repo/docker-compose.yml',
+      containerName: 'oc-run-abc',
+      prompt: 'p',
+    });
+    assert.equal(args.includes('-v'), false);
+  });
 });
