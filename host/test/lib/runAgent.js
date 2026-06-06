@@ -52,8 +52,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { runClaw } from './claw.js';
+import { runOpenCode } from './opencode.js';
 import * as workspace from './workspace.js';
 import { clawModel } from './tier.js';
+import { resolveConfigId } from './config.js';
 
 const DEFAULT_POST_SCRIPT_TIMEOUT_MS  = 5_000;
 const DEFAULT_PRECONDITION_TIMEOUT_MS = 5_000;
@@ -262,6 +264,41 @@ export async function runAgent({
   }
 }
 
+// Resolve the active runner from the process-level CONFIG selector (issue #011).
+// Exported so the workspace round-trip script and unit tests exercise the SAME
+// selection logic defaultRunner uses, rather than a parallel reimplementation.
+// Returns a function with the runner call shape ({prompt,signal,timeoutMs}).
+//
+// claw runs in-process (binary baked into the test image); opencode runs in a
+// SIBLING container that bind-mounts a HOST dir at /workspace. For the harness's
+// reset/seed/post-script (which operate on the container path workspace.WORKSPACE
+// = '/workspace') and the agent's writes to land in the SAME place, the sibling
+// must mount the host dir that backs THIS container's /workspace. That host path
+// is supplied out-of-band by the #013 driver as HOST_WORKSPACE; without it the
+// sibling would mount a different dir and the oracle would never see the agent's
+// writes, so we fail loud rather than silently false-fail every cell. See
+// host/test/docs/OPENCODE-WORKSPACE-CONTRACT.md.
+export function selectRunner(env = process.env) {
+  if (resolveConfigId(env) === 'opencode-a') {
+    const workspaceDir = env.HOST_WORKSPACE;
+    if (!workspaceDir) {
+      throw new Error(
+        'CONFIG=opencode-a requires HOST_WORKSPACE — the host path backing the ' +
+        "test container's /workspace bind mount (set by the #013 driver). Without " +
+        'it the opencode sibling container would mount a different host dir and the ' +
+        'workspace oracle would never see the agent\'s writes. See ' +
+        'host/test/docs/OPENCODE-WORKSPACE-CONTRACT.md.',
+      );
+    }
+    return ({ prompt, signal, timeoutMs }) =>
+      runOpenCode({ prompt, signal, timeoutMs, workspaceDir });
+  }
+  return ({ prompt, signal, timeoutMs }) =>
+    runClaw({ prompt, model: clawModel, signal, timeoutMs });
+}
+
+// Re-resolves on every invocation so the selector reads the env live (tests
+// mutate CONFIG/HOST_WORKSPACE between calls); the resolution is cheap.
 function defaultRunner({ prompt, signal, timeoutMs }) {
-  return runClaw({ prompt, model: clawModel, signal, timeoutMs });
+  return selectRunner()({ prompt, signal, timeoutMs });
 }

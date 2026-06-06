@@ -26,6 +26,7 @@ import path from 'node:path';
 import { WORKSPACE } from './workspace.js';
 import { emitRow } from './run_row.js';
 import { readManifest } from './test_manifest.js';
+import { resolveConfigId, modelConfigIdFor } from './config.js';
 
 const SCHEMA_VERSION = 1;
 const RUNTIME_ROOT = '/workspace/.claw-runtime';
@@ -243,18 +244,29 @@ function maybeEmitRegistryRow(runDir) {
   }
   const manifest = readManifest(testFile);
 
-  const model_config_id = process.env.RUN_REGISTRY_MODEL_CONFIG_ID;
+  // Coarse bundle label (issue #011 selector → #002 dimension). The single
+  // CONFIG env that picks the runner also labels the row, so an opencode-a run's
+  // row can never disagree with the runner that produced it; claw stays 'claw-rig'.
+  const config_id = resolveConfigId();
+  const tierStr = process.env.RUN_REGISTRY_HARDWARE_TIER || process.env.TIER || '64';
+  // claw always supplies its model_config_id explicitly (it varies per sampler
+  // sweep). For opencode-a, auto-pick the tier's Config-B serving fingerprint
+  // from the manifest so the driver need only set CONFIG=opencode-a + TIER; an
+  // explicit env still wins.
+  const model_config_id = process.env.RUN_REGISTRY_MODEL_CONFIG_ID
+    || modelConfigIdFor({ configId: config_id, tier: tierStr });
   if (!model_config_id) {
     console.error(`[run-registry] RUN_REGISTRY_MODEL_CONFIG_ID required when RUN_REGISTRY_EMIT=1; skipping emit`);
     return;
   }
-  const tier = parseInt(process.env.RUN_REGISTRY_HARDWARE_TIER || process.env.TIER || '64', 10);
+  const tier = parseInt(tierStr, 10);
   const memory = parseInt(process.env.RUN_REGISTRY_MEMORY_GB || String(tier), 10);
 
   const ctx = {
     run_kind: process.env.RUN_REGISTRY_KIND || 'smoke',
     hardware_tier: tier,
     memory_gb: memory,
+    config_id,
     model_config_id,
     test_id,
     test_version: manifest.test_version,
