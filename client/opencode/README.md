@@ -6,9 +6,15 @@ challenger harness in the claw-rig vs OpenCode A/B (see
 The sibling [`../claw-code`](../claw-code) container is Config A.
 
 **Scope of this image (#007):** a buildable image with a working `opencode`
-binary on PATH, version pinned via build arg. Wiring OpenCode to the second
-`llama-server` and a `/workspace` mount (compose, `opencode.json`, provider
-config) lands in #008.
+binary on PATH, version pinned via build arg.
+
+**Wiring (#008):** [`docker-compose.yml`](docker-compose.yml) mounts
+`${WORKSPACE}:/workspace` and points OpenCode at the **second `llama-server`**
+(the #005 OpenCode-dedicated, tier-64 instance on `:11436`) via the
+`@ai-sdk/openai-compatible` provider in [`opencode.json`](opencode.json). No
+`ANTHROPIC_BASE_URL` and no LiteLLM on this side — OpenCode talks straight to the
+llama-server's openai-compatible endpoint (which needs no auth). See
+[Run / wiring](#run--wiring) below.
 
 ## Why no build stage
 
@@ -40,3 +46,38 @@ docker run --rm opencode:local opencode --version   # prints the pinned version
 
 The build also runs `opencode --version` as a final layer, so a bad pin or a
 missing-on-PATH binary fails the build rather than shipping a broken image.
+
+## Run / wiring
+
+```sh
+cd client/opencode
+cp .env.example .env        # set WORKSPACE (defaults to ./workspace)
+docker compose up -d        # builds opencode:local if needed, then idles
+```
+
+- **`docker-compose.yml`** bind-mounts `${WORKSPACE}:/workspace` and mounts
+  [`opencode.json`](opencode.json) read-only at
+  `/root/.config/opencode/opencode.json` (OpenCode's global config path for the
+  root user). The config is **mounted, not baked**, so it stays repo-visible and
+  editable without rebuilding the image.
+- **`opencode.json`** declares one provider, `llama-local`
+  (`@ai-sdk/openai-compatible`), with
+  `baseURL = http://host.docker.internal:11436/v1` and model id `opencode` — the
+  `--alias` the #005 server serves under. `host.docker.internal` resolves to the
+  host via the `extra_hosts: host-gateway` entry (OrbStack), so this works even
+  when OpenCode runs on the lab box itself. `apiKey` is a throwaway: the
+  llama-server does not check it.
+- **No `ANTHROPIC_BASE_URL`, no LiteLLM** on this side. That bridge plumbing is
+  the claw-code (Config A) mechanism only; Config B is a direct
+  container → host llama-server hop.
+
+### Verify connectivity (the #008 acceptance check)
+
+With the #005 server up on `:11436`, from inside the container:
+
+```sh
+docker compose run --rm opencode curl -s -o /dev/null -w '%{http_code}\n' \
+  host.docker.internal:11436/health      # -> 200
+```
+
+A full one-shot agent run (`opencode run "<prompt>"`) is wired in #009.

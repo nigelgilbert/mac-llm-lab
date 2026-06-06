@@ -1,0 +1,35 @@
+services:
+  opencode:
+    build:
+      context: .
+      args:
+        OPENCODE_VERSION: ${OPENCODE_VERSION:-1.16.2}
+    image: opencode:local
+    container_name: opencode
+    restart: unless-stopped
+    volumes:
+      - ${WORKSPACE}:/workspace
+      # opencode.json is MOUNTED (not baked) so the provider config stays
+      # repo-visible and editable without an image rebuild. OpenCode reads its
+      # global config from $XDG_CONFIG_HOME/opencode; the container runs as root,
+      # so that resolves to /root/.config/opencode/opencode.json.
+      - ./opencode.json:/root/.config/opencode/opencode.json:ro
+    working_dir: /workspace
+    environment:
+      # CRA reads HOST; harmless for others. Vite/Next still need their own --host
+      # flag. Mirrors claw-code so the shared task suite behaves the same here.
+      - HOST=0.0.0.0
+    # B-side talks STRAIGHT to the second llama-server — NO ANTHROPIC_BASE_URL,
+    # NO LiteLLM bridge. The baseURL (host.docker.internal:11436/v1) lives in
+    # opencode.json, not here; that endpoint is the #005 OpenCode-dedicated
+    # llama-server (tier-64, alias `opencode`).
+    extra_hosts:
+      # Lets host.docker.internal resolve to the host when OpenCode runs on the
+      # lab box itself (OrbStack maps host-gateway to the host).
+      - "host.docker.internal:host-gateway"
+    # Single dev-server port, mirroring claw-code: tasks in /workspace may start a
+    # framework dev server on 8080.
+    ports:
+      - "8080:8080"
+    # Long-lived no-op so `docker compose exec` can attach / drive OpenCode.
+    command: ["sleep", "infinity"]
