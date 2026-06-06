@@ -11,6 +11,7 @@
 //       run_kind, hardware_tier, memory_gb, model_config_id,
 //       test_id, test_version, oracle_type, harness_version
 //     Optional fields: canonical_status (default 'canonical'),
+//       config_id (coarse bundle label, default 'claw-rig'),
 //       seed, prompt_pack_version, screening_only, iteration_budget,
 //       timeout_budget_ms, manifestPath (override for model-config lookup),
 //       registryPath (override target jsonl), now (clock injection for tests).
@@ -96,6 +97,9 @@ export function assembleRow(clawResult, ctx) {
     canonical_status: ctx.canonical_status ?? 'canonical',
     hardware_tier: ctx.hardware_tier,
     memory_gb: ctx.memory_gb,
+    // Coarse bundle label (issue #002). Threaded from run context; existing
+    // claw runs default to 'claw-rig' so pre-opencode callers need no change.
+    config_id: ctx.config_id ?? 'claw-rig',
     model_config_id: ctx.model_config_id,
     model_id: config.model_id,
     quantization: config.quantization,

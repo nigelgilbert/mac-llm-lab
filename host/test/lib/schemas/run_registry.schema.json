@@ -11,6 +11,7 @@
     "canonical_status",
     "hardware_tier",
     "memory_gb",
+    "config_id",
     "model_config_id",
     "test_id",
     "test_version",
@@ -58,6 +59,14 @@
       "type": "integer",
       "minimum": 1,
       "description": "Physical memory of the machine that produced this row. Should match hardware_tier for canonical rows."
+    },
+    "config_id": {
+      "type": "string",
+      "enum": [
+        "claw-rig",
+        "opencode-a"
+      ],
+      "description": "Coarse bundle label grouping rows by serving/harness stack before any data is collected (OPENCODE-HARNESS-AB-PLAN.md §4.5). `claw-rig` is the established claw + llama-server stack; `opencode-a` is the opencode harness bundle. Complementary to — not a replacement for — `model_config_id`, which is the fine-grained serving fingerprint."
     },
     "model_config_id": {
       "type": "string",
