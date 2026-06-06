@@ -2,6 +2,8 @@
 
 **Type**: AFK
 
+**Status:** 🟢 Ready — blocker #005 met (optional / post-v1)
+
 ## Parent
 
 [OPENCODE-HARNESS-AB-PLAN.md](../host/test/docs/OPENCODE-HARNESS-AB-PLAN.md) §4.4, §4.7

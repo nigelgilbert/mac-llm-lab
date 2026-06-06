@@ -2,6 +2,8 @@
 
 **Type**: HITL
 
+**Status:** ✅ Done — 2a4a886
+
 ## Parent
 
 [OPENCODE-HARNESS-AB-PLAN.md](../host/test/docs/OPENCODE-HARNESS-AB-PLAN.md) §4.1, §5

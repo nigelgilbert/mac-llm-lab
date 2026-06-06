@@ -2,6 +2,8 @@
 
 **Type**: AFK
 
+**Status:** ✅ Done — 1f37e86
+
 ## Parent
 
 [OPENCODE-HARNESS-AB-PLAN.md](../host/test/docs/OPENCODE-HARNESS-AB-PLAN.md) §4.5
@@ -20,10 +22,10 @@ in #003), not a replacement.
 
 ## Acceptance criteria
 
-- [ ] `config_id` added to the run-registry JSON schema with an enum of `claw-rig` | `opencode-a`
-- [ ] Row assembly populates `config_id` from run context; existing claw runs default to `claw-rig`
-- [ ] A row carrying a valid `config_id` validates; an out-of-enum value fails validation
-- [ ] A row missing `config_id` is handled explicitly (rejected, or defaulted with the decision recorded)
+- [x] `config_id` added to the run-registry JSON schema with an enum of `claw-rig` | `opencode-a`
+- [x] Row assembly populates `config_id` from run context; existing claw runs default to `claw-rig`
+- [x] A row carrying a valid `config_id` validates; an out-of-enum value fails validation
+- [x] A row missing `config_id` is handled explicitly (rejected, or defaulted with the decision recorded)
 
 ## Blocked by
 

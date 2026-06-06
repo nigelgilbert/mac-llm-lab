@@ -2,6 +2,8 @@
 
 **Type**: HITL
 
+**Status:** ✅ Done — 17f6abb
+
 ## Parent
 
 [OPENCODE-HARNESS-AB-PLAN.md](../host/test/docs/OPENCODE-HARNESS-AB-PLAN.md) §5 ·
@@ -21,10 +23,10 @@ first request without the 500, and preserves tool-call emission.
 
 ## Acceptance criteria
 
-- [ ] Corrected Jinja template committed in-repo at a stable path, with provenance/source noted
-- [ ] Rendering a request whose system message is **not** first no longer 500s
-- [ ] Template preserves native `<tool_call>` emission and honors `enable_thinking` kwargs
-- [ ] Source + the exact fix applied are documented alongside the vendored file
+- [x] Corrected Jinja template committed in-repo at a stable path, with provenance/source noted
+- [x] Rendering a request whose system message is **not** first no longer 500s
+- [x] Template preserves native `<tool_call>` emission and honors `enable_thinking` kwargs
+- [x] Source + the exact fix applied are documented alongside the vendored file
 
 ## Blocked by
 

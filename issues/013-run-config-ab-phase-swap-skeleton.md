@@ -2,6 +2,8 @@
 
 **Type**: HITL
 
+**Status:** ⏳ Blocked by #012
+
 ## Parent
 
 [OPENCODE-HARNESS-AB-PLAN.md](../host/test/docs/OPENCODE-HARNESS-AB-PLAN.md) §4.2, §4.6

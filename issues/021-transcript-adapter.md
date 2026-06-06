@@ -2,6 +2,8 @@
 
 **Type**: AFK
 
+**Status:** ⏳ Blocked by #020
+
 ## Parent
 
 [OPENCODE-HARNESS-AB-PLAN.md](../host/test/docs/OPENCODE-HARNESS-AB-PLAN.md) §4.4

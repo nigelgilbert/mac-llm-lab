@@ -2,6 +2,8 @@
 
 **Type**: AFK
 
+**Status:** ✅ Done — 805589c (AC "full claw suite green under the new oracle" deferred to the #014 full sweep)
+
 ## Parent
 
 [OPENCODE-HARNESS-AB-PLAN.md](../host/test/docs/OPENCODE-HARNESS-AB-PLAN.md) §0b
@@ -24,10 +26,10 @@ on success).
 
 ## Acceptance criteria
 
-- [ ] Pass is decided solely by the `/workspace` post-script (`post.status === 0`); `agent.code` no longer gates pass on either config
-- [ ] Agent exit code is captured as telemetry and surfaces a "crashed before finishing" diagnostic when non-zero
-- [ ] Pass decision is centralized (not re-asserted in each of the 35 test bodies)
-- [ ] Any pure-`agent.code` test (no post-script) is identified and either given a workspace oracle or explicitly marked not-yet-A/B-eligible
+- [x] Pass is decided solely by the `/workspace` post-script (`post.status === 0`); `agent.code` no longer gates pass on either config
+- [x] Agent exit code is captured as telemetry and surfaces a "crashed before finishing" diagnostic when non-zero
+- [x] Pass decision is centralized (not re-asserted in each of the 35 test bodies)
+- [x] Any pure-`agent.code` test (no post-script) is identified and either given a workspace oracle or explicitly marked not-yet-A/B-eligible
 - [ ] Full claw tier-eval suite runs green under the new oracle; any baseline change is explained
 
 ## Blocked by

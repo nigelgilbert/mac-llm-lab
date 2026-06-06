@@ -2,6 +2,8 @@
 
 **Type**: AFK
 
+**Status:** ✅ Done — aab2c98
+
 ## Parent
 
 [OPENCODE-HARNESS-AB-PLAN.md](../host/test/docs/OPENCODE-HARNESS-AB-PLAN.md) §4.2 ·
@@ -21,10 +23,10 @@ correctness is validated separately in #006.
 
 ## Acceptance criteria
 
-- [ ] Second `llama-server` starts on a distinct port from the claw instance and reports a green `/health`
-- [ ] Launched with corrected template + `--jinja`, no grammar, `enable_thinking:false`, tier-64 sampler, generous `-n`
-- [ ] Bringing it up does not disturb or require stopping the claw launchd instance to validate health
-- [ ] Start/stop is scriptable (no interactive steps) for later use by the phase-swap driver
+- [x] Second `llama-server` starts on a distinct port from the claw instance and reports a green `/health`
+- [x] Launched with corrected template + `--jinja`, no grammar, `enable_thinking:false`, tier-64 sampler, generous `-n`
+- [x] Bringing it up does not disturb or require stopping the claw launchd instance to validate health
+- [x] Start/stop is scriptable (no interactive steps) for later use by the phase-swap driver
 
 ## Blocked by
 

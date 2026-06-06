@@ -2,6 +2,8 @@
 
 **Type**: AFK
 
+**Status:** ✅ Done — 0382e82
+
 ## Parent
 
 [OPENCODE-HARNESS-AB-PLAN.md](../host/test/docs/OPENCODE-HARNESS-AB-PLAN.md) §4.5
@@ -21,10 +23,10 @@ makes every row self-documenting.
 
 ## Acceptance criteria
 
-- [ ] Two new manifest entries exist (tier-64 B, tier-16 B), each validating against the manifest schema
-- [ ] Each reuses the tier's `model_id` / `quantization` / `context_limit` / `sampler_config_id`
-- [ ] Each note describes B's serving: corrected Jinja, no grammar, native tool-call, thinking-off via `chat-template-kwargs`
-- [ ] The new `model_config_id`s are referenceable by run context (resolvable like existing ids)
+- [x] Two new manifest entries exist (tier-64 B, tier-16 B), each validating against the manifest schema
+- [x] Each reuses the tier's `model_id` / `quantization` / `context_limit` / `sampler_config_id`
+- [x] Each note describes B's serving: corrected Jinja, no grammar, native tool-call, thinking-off via `chat-template-kwargs`
+- [x] The new `model_config_id`s are referenceable by run context (resolvable like existing ids)
 
 ## Blocked by
 

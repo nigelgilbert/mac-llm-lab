@@ -2,6 +2,8 @@
 
 **Type**: AFK
 
+**Status:** ✅ Done — 8744b86
+
 ## Parent
 
 [OPENCODE-HARNESS-AB-PLAN.md](../host/test/docs/OPENCODE-HARNESS-AB-PLAN.md) §4.1 ·
@@ -17,10 +19,10 @@ config. Mount `${WORKSPACE}:/workspace`. Point OpenCode at the **second
 
 ## Acceptance criteria
 
-- [ ] `client/opencode/docker-compose.yml` mounts `${WORKSPACE}:/workspace`
-- [ ] `opencode.json` defines an `openai-compatible` provider with `baseURL` → `host.docker.internal:<port>/v1` and the model id
-- [ ] From inside the container, OpenCode can reach the host's second `llama-server` (connectivity verified)
-- [ ] No `ANTHROPIC_BASE_URL` / bridge plumbing on this side
+- [x] `client/opencode/docker-compose.yml` mounts `${WORKSPACE}:/workspace`
+- [x] `opencode.json` defines an `openai-compatible` provider with `baseURL` → `host.docker.internal:<port>/v1` and the model id
+- [x] From inside the container, OpenCode can reach the host's second `llama-server` (connectivity verified)
+- [x] No `ANTHROPIC_BASE_URL` / bridge plumbing on this side
 
 ## Blocked by
 

@@ -2,6 +2,8 @@
 
 **Type**: HITL
 
+**Status:** 🟢 Ready — blocker #009 met
+
 ## Parent
 
 [OPENCODE-HARNESS-AB-PLAN.md](../host/test/docs/OPENCODE-HARNESS-AB-PLAN.md) §4.4, §5

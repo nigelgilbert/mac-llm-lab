@@ -2,6 +2,8 @@
 
 **Type**: AFK
 
+**Status:** ✅ Done — f57d4a3
+
 ## Parent
 
 [OPENCODE-HARNESS-AB-PLAN.md](../host/test/docs/OPENCODE-HARNESS-AB-PLAN.md) §4.1
@@ -15,10 +17,10 @@ binary; wiring to a model and workspace happens in #008.
 
 ## Acceptance criteria
 
-- [ ] `client/opencode/Dockerfile` builds an image with the `opencode` binary on PATH
-- [ ] OpenCode version pinned via build arg
-- [ ] `opencode --version` runs inside the container and reports the pinned version
-- [ ] Image layering mirrors the claw-code container conventions (base, node/git as needed)
+- [x] `client/opencode/Dockerfile` builds an image with the `opencode` binary on PATH
+- [x] OpenCode version pinned via build arg
+- [x] `opencode --version` runs inside the container and reports the pinned version
+- [x] Image layering mirrors the claw-code container conventions (base, node/git as needed)
 
 ## Blocked by
 

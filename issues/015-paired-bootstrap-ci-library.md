@@ -2,6 +2,8 @@
 
 **Type**: AFK
 
+**Status:** ✅ Done — 125ed00
+
 ## Parent
 
 [OPENCODE-HARNESS-AB-PLAN.md](../host/test/docs/OPENCODE-HARNESS-AB-PLAN.md) §0a
@@ -17,11 +19,11 @@ the per-task pass-rate deltas. Pure function over registry rows grouped by
 
 ## Acceptance criteria
 
-- [ ] Given per-task per-config pass counts, returns the aggregate `(B − claw)` delta and 90% paired-bootstrap CI lower bound
-- [ ] Resamples over the 35 tasks (paired), not over pooled individual runs
-- [ ] Returns per-task deltas alongside the aggregate
-- [ ] Unit tests cover known synthetic cases (clear non-inferior, clear inferior, borderline) with deterministic seeding
-- [ ] Operates on registry rows grouped by `config_id` (and tier)
+- [x] Given per-task per-config pass counts, returns the aggregate `(B − claw)` delta and 90% paired-bootstrap CI lower bound
+- [x] Resamples over the 35 tasks (paired), not over pooled individual runs
+- [x] Returns per-task deltas alongside the aggregate
+- [x] Unit tests cover known synthetic cases (clear non-inferior, clear inferior, borderline) with deterministic seeding
+- [x] Operates on registry rows grouped by `config_id` (and tier)
 
 ## Blocked by
 

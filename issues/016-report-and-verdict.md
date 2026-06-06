@@ -2,6 +2,8 @@
 
 **Type**: AFK
 
+**Status:** ⏳ Blocked by #014 (#015 met)
+
 ## Parent
 
 [OPENCODE-HARNESS-AB-PLAN.md](../host/test/docs/OPENCODE-HARNESS-AB-PLAN.md) §0a, §4.7
