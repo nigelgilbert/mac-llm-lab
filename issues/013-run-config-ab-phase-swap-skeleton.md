@@ -2,7 +2,7 @@
 
 **Type**: HITL
 
-**Status:** ✅ Done — SHA_PLACEHOLDER — paired `claw-rig`↔`opencode-a` smoke green
+**Status:** ✅ Done — c63d112 — paired `claw-rig`↔`opencode-a` smoke green
 (deep-equal, N=2/cell): every row `config_id`-stamped and `paired_bootstrap` buckets
 both sides (claw-rig=2, opencode-a=2 — baseline NOT dropped), gated by
 `scripts/config-ab-pairing-check.mjs`. Ran **co-resident** (claw `:11435` left
