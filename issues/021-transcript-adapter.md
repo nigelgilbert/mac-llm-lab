@@ -4,8 +4,7 @@
 
 **Status:** ✅ Done — adapter + #022 wiring shipped; validated field-by-field against
 the #020 evidence DB and end-to-end on a fresh live `opencode run` (DB survived `--rm`
-via the bind mount; the 2.5 MB WAL applied correctly). Feature sha: _(pointed by the
-follow-up commit)_.
+via the bind mount; the 2.5 MB WAL applied correctly). Feature sha: `2e5daef`.
 
 ## Parent
 
