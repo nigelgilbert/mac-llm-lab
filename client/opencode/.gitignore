@@ -1,2 +1,5 @@
 .env
 workspace/
+# Per-run runner sidecars (runOpenCode, #010): run_summary.json + iterations.jsonl
+# + smoke scratch. Analog of host/test/.claw-runtime; never committed.
+.opencode-runtime/
