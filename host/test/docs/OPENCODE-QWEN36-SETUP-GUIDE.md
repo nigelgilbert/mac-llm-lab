@@ -19,19 +19,25 @@ below are the tier-64 acceptance criteria).
 
 Run a **second, OpenCode-dedicated `llama-server`** (separate port from the claw
 launchd instance), **without** `claw.gbnf`, so the model emits native `<tool_call>`
-that llama.cpp parses into OpenAI `tool_calls`. Three fixes below are **required to
-make tool calling work at all** on this model+OS — they are not performance tuning,
-so they don't compromise the "vanilla" framing.
+that llama.cpp parses into OpenAI `tool_calls`. The fixes below are **serving
+correctness, not performance tuning**, so they don't compromise the "vanilla" framing.
+Fixes 1 and 3 are required-to-function on this model+OS; fix 2 (thinking-off) is kept
+for claw-parity — it proved *not* strictly required on build `b1-5594d13` (see fix 2).
 
-## Required-to-function fixes (→ ticket acceptance criteria)
+## Serving-correctness fixes (→ ticket acceptance criteria)
 
 1. **Corrected chat template + `--jinja`.** Stock Qwen3.5/3.6 template returns
    **HTTP 500** when OpenCode sends a request whose system message isn't strictly
    first. Patched Jinja template required. [aayushgarg], [njannasch]
-2. **Thinking OFF** (`--chat-template-kwargs '{"enable_thinking":false}'`). The
-   35B-A3B `peg-native` parser is `root ::= tool-call`; any prose before
-   `<tool_call>` fails to parse → the "naked-XML freeze." Thinking-off sidesteps it.
-   [llama.cpp#20260], [opencode#24316]
+2. **Thinking OFF** (`--chat-template-kwargs '{"enable_thinking":false}'`). Kept for
+   **claw-parity** — claw runs thinking-off under the harness (see below) — and as
+   insurance against the "naked-XML freeze," where prose before `<tool_call>` can
+   defeat a `root ::= tool-call` peg-native parser ([llama.cpp#20260],
+   [opencode#24316]). **That freeze did NOT reproduce on this build** (`b1-5594d13`):
+   #006 saw tool-calls parse cleanly with thinking ON and even under prose-demanding
+   prompts (39/39 live generations), so thinking-off is **not** load-bearing for
+   tool-call parsing here — it stays on for parity regardless. See
+   [TOOL-CALL-VALIDATION.md](../../llama-server/docs/TOOL-CALL-VALIDATION.md) Finding 2.
    **Confirmed parity (tier-64):** claw also runs thinking OFF here — the
    `claw-llama` LiteLLM route forces `extra_body.chat_template_kwargs.enable_thinking
    = false` (`host/litellm/litellm-config.yaml`; `model_configs.json:475` "thinking
@@ -105,7 +111,8 @@ llama-server \
   That validation also found the `#20260` "naked-XML freeze" did **not** reproduce on
   this build even with thinking ON — so fix #2's "required-to-function" framing above
   is stronger than `b1-5594d13` requires (thinking-off still kept for **claw-parity**,
-  not freeze-avoidance). Left as-is pending human review — see the doc's Finding 2.
+  not freeze-avoidance). **Applied 2026-06-06** — fix #2 and the section framing above
+  softened accordingly (human-reviewed; see the doc's Finding 2).
 - Thinking-off costs reasoning quality but buys tool reliability — flag as a
   one-flag A/B sub-variant if we want to measure it.
 - Docker: reach host `llama-server`/Ollama via `host.docker.internal` (per plan §4.1).
