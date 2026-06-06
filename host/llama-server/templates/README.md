@@ -171,3 +171,8 @@ Last run (this commit) — **13 passed, 0 failed**:
 - The args-type regression [llama.cpp#20198] (`tool_calls.arguments` object vs
   string) is a **parser** concern, not a template one — validate it in #006 against
   live generation; it's out of scope for this template.
+  **DONE (#006):** on `b1-5594d13` `arguments` is a **STRING** (OpenAI-strict), no
+  shim needed; and native `tool_calls[]` parse cleanly (no naked-XML freeze) in both
+  streaming and non-streaming. See
+  [docs/TOOL-CALL-VALIDATION.md](../docs/TOOL-CALL-VALIDATION.md) +
+  [scripts/validate-tool-calls.sh](../scripts/validate-tool-calls.sh).

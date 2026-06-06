@@ -98,8 +98,14 @@ llama-server \
   mode is a silently-**dropped** system message (HTTP 200), not the HTTP 500 the
   community sources reported on the upstream variant; the corrected template fixes
   both.
-- Confirm our llama.cpp build honors `enable_thinking` kwargs and does not hit the
-  [#20198] args-type regression.
+- ~~Confirm our llama.cpp build honors `enable_thinking` kwargs and does not hit the
+  [#20198] args-type regression.~~ **RESOLVED (#006):** build `b1-5594d13` honors the
+  per-request kwarg AND does **not** hit #20198 (`arguments` is a STRING). Live
+  validation: [../../llama-server/docs/TOOL-CALL-VALIDATION.md](../../llama-server/docs/TOOL-CALL-VALIDATION.md).
+  That validation also found the `#20260` "naked-XML freeze" did **not** reproduce on
+  this build even with thinking ON — so fix #2's "required-to-function" framing above
+  is stronger than `b1-5594d13` requires (thinking-off still kept for **claw-parity**,
+  not freeze-avoidance). Left as-is pending human review — see the doc's Finding 2.
 - Thinking-off costs reasoning quality but buys tool reliability — flag as a
   one-flag A/B sub-variant if we want to measure it.
 - Docker: reach host `llama-server`/Ollama via `host.docker.internal` (per plan §4.1).

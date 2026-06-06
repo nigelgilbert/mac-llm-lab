@@ -20,10 +20,20 @@ end-to-end on this model+OS **before** any container or runner work depends on i
 
 ## Acceptance criteria
 
-- [ ] A raw `/v1/chat/completions` request with a tool spec returns a parsed `tool_calls[]` (not raw XML in content)
-- [ ] No prose-before-`<tool_call>` parse failure (thinking-off confirmed effective)
-- [ ] `arguments` type behavior documented per `#20198`; shim applied or confirmed unnecessary
-- [ ] A short validation transcript / command is recorded so the result is reproducible
+- [x] A raw `/v1/chat/completions` request with a tool spec returns a parsed `tool_calls[]` (not raw XML in content)
+- [x] No prose-before-`<tool_call>` parse failure (thinking-off confirmed effective)
+- [x] `arguments` type behavior documented per `#20198`; shim applied or confirmed unnecessary
+- [x] A short validation transcript / command is recorded so the result is reproducible
+
+## Result (2026-06-06, build `b1-5594d13`)
+
+✅ **PASS — 39/39 live generations.** Native `tool_calls[]` parse cleanly (streaming
++ non-streaming); `arguments` is a **STRING** (OpenAI-strict) so **no #20198 shim** is
+needed. The `#20260` "naked-XML freeze" **did not reproduce** on this build even with
+thinking ON / prose-before-call — so thinking-off is kept for **claw-parity**, not as a
+freeze-workaround (flagged for human review). Full write-up, transcripts, and caveats:
+[host/llama-server/docs/TOOL-CALL-VALIDATION.md](../host/llama-server/docs/TOOL-CALL-VALIDATION.md).
+Re-runnable: [host/llama-server/scripts/validate-tool-calls.sh](../host/llama-server/scripts/validate-tool-calls.sh).
 
 ## Blocked by
 
