@@ -38,7 +38,13 @@ printf '  %s\n' "${matches[@]}" >&2
 # entrypoint.sh's /root/.claw/settings.json alias-table setup still runs
 # before our node invocation — without it, this helper would exercise a
 # different claw configuration than `npm test`/the sweep runners.
-docker compose run --rm \
+# Supply the LiteLLM master key the same way the canonical sweep runners do
+# (run-tier-eval.sh): without --env-file, ${LITELLM_MASTER_KEY} in
+# docker-compose.yml resolves empty and claw exits in ~4ms on
+# missing_credentials — so single-test runs would silently never reach the model.
+ENV_FILE="../litellm/.env"
+[[ -f "$ENV_FILE" ]] || { echo "missing $ENV_FILE (LiteLLM master key); bring up host/litellm first" >&2; exit 1; }
+docker compose --env-file "$ENV_FILE" run --rm \
   -v "$PWD/__tests__:/test/__tests__" \
   -v "$PWD/lib:/test/lib" \
   -v "$PWD/scripts:/test/scripts" \
