@@ -89,12 +89,14 @@ check() { # $1 desc ; $2 condition(0/1 via test outside) -- helper prints result
 has() { case "$1" in *"$2"*) echo ok;; *) echo no;; esac; }
 
 if [ "${1:-}" = "--diff" ]; then
-  # Extract the stock template from the tier-64 GGUF and diff behaviour.
-  STOCK="$(mktemp -t qwen36stock.XXXXXX.jinja)"
-  PYTHONPATH="$HOME/src/llama.cpp/gguf-py" python3 - "$STOCK" <<'PY'
-import sys
+  # Extract the stock template from a GGUF and diff behaviour. Defaults to the
+  # tier-64 35B; override STOCK_GGUF= to diff the tier-16 9B (#018) or any other.
+  STOCK_GGUF="${STOCK_GGUF:-$HOME/.ollama/gguf/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf}"
+  STOCK="$(mktemp -t qwenstock.XXXXXX.jinja)"
+  STOCK_GGUF="$STOCK_GGUF" PYTHONPATH="$HOME/src/llama.cpp/gguf-py" python3 - "$STOCK" <<'PY'
+import sys, os
 from gguf import GGUFReader
-r = GGUFReader(f"{__import__('os').path.expanduser('~')}/.ollama/gguf/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf")
+r = GGUFReader(os.environ["STOCK_GGUF"])
 open(sys.argv[1],'w').write(r.get_field('tokenizer.chat_template').contents())
 PY
   echo "== STOCK (embedded) on system-not-first =="

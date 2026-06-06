@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
 # ============================================================================
-# opencode-server — start/stop/health for the SECOND, OpenCode-dedicated
-# llama-server (Config B of the OpenCode A/B plan, issue #005).
+# opencode-server — start/stop/health for the OpenCode-dedicated llama-server
+# (Config B of the OpenCode A/B plan). TIER-PARAMETERIZED:
+#   OPENCODE_TIER=64  (default) — tier-64 Qwen3.6-35B-A3B, :11436, #005
+#   OPENCODE_TIER=16            — tier-16 Qwen3.5-9B,      :11437, #018
 #
-# Serves the SAME tier-64 GGUF as the production claw server, but with
+# Serves the SAME per-tier GGUF as the production claw server, but with
 # OpenCode's serving config:
-#   --jinja + the vendored corrected template (system-not-first fix, #004)
+#   --jinja + the vendored corrected template (system-not-first fix)
+#       tier-64 → qwen36-corrected.jinja (#004); tier-16 → qwen35-corrected.jinja (#018)
 #   NO claw.gbnf grammar  (Config B uses native <tool_call> parsing)
-#   thinking-off via --chat-template-kwargs '{"enable_thinking":false}'
-#   tier-64 sampler (mirrored from models.conf / the claw launchd plist)
+#   thinking-off via --chat-template-kwargs '{"enable_thinking":false}' (#017)
+#   per-tier sampler (mirrored from models.conf TIER_${TIER}_*)
 #   generous -n so tool-call args don't truncate
 #
-# It runs on its OWN port (:11436) and as its OWN background process, so it
-# NEVER touches the production claw launchd on :11435 or LiteLLM on :4000.
+# Each tier runs on its OWN port and as its OWN background process (own log,
+# pidfile, alias, launchd label), so it NEVER touches the production claw
+# launchd on :11435, LiteLLM on :4000, or the OTHER OpenCode tier's server.
 # Start/stop is fully scriptable (no interactive steps) for the phase-swap
 # driver (#013).
 #
@@ -35,25 +39,34 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$SCRIPT_DIR/.."
 
-# --- Fixed identity for this dedicated server ------------------------------
-TIER=64                                   # tier-64 dedicated (tier-16 is #018)
-PORT="${OPENCODE_LLAMA_PORT:-11436}"      # own port; avoids claw :11435, LiteLLM :4000
+# --- Per-tier identity for this dedicated server ---------------------------
+# OPENCODE_TIER selects which tier this invocation serves. Each tier gets its
+# own port/alias/template/log/pidfile/launchd-label so the two OpenCode servers
+# (and the production claw server) coexist without ever colliding.
+TIER="${OPENCODE_TIER:-64}"
+case "$TIER" in
+  64) DEF_PORT=11436; DEF_ALIAS=opencode;    DEF_TEMPLATE=qwen36-corrected.jinja; TAG="" ;;
+  16) DEF_PORT=11437; DEF_ALIAS=opencode-16; DEF_TEMPLATE=qwen35-corrected.jinja; TAG="-16" ;;
+  *)  echo "ERROR: unsupported OPENCODE_TIER=$TIER (use 16 or 64)" >&2; exit 1 ;;
+esac
+
+PORT="${OPENCODE_LLAMA_PORT:-$DEF_PORT}"   # own port; avoids claw :11435, LiteLLM :4000, other tier
 HOST_BIND="${OPENCODE_LLAMA_HOST:-0.0.0.0}"  # 0.0.0.0 so docker reaches via host.docker.internal
-ALIAS=opencode
+ALIAS="${OPENCODE_LLAMA_ALIAS:-$DEF_ALIAS}"
 BASE="http://127.0.0.1:$PORT"
 BINARY="${LLAMA_SERVER:-$HOME/.local/bin/llama-server}"
-TEMPLATE="$ROOT/templates/qwen36-corrected.jinja"
-LOG="${OPENCODE_LLAMA_LOG:-/tmp/opencode-llama-server.log}"
-PIDFILE="${OPENCODE_LLAMA_PIDFILE:-/tmp/opencode-llama-server.pid}"
+TEMPLATE="${OPENCODE_LLAMA_TEMPLATE:-$ROOT/templates/$DEF_TEMPLATE}"
+LOG="${OPENCODE_LLAMA_LOG:-/tmp/opencode-llama-server${TAG}.log}"
+PIDFILE="${OPENCODE_LLAMA_PIDFILE:-/tmp/opencode-llama-server${TAG}.pid}"
 NPREDICT="${OPENCODE_LLAMA_NPREDICT:-8192}"   # generous -n: avoid tool-call arg truncation
-HEALTH_TIMEOUT="${OPENCODE_LLAMA_HEALTH_TIMEOUT:-180}"  # 21 GB model load is slow
+HEALTH_TIMEOUT="${OPENCODE_LLAMA_HEALTH_TIMEOUT:-180}"  # model load (21 GB tier-64 slowest)
 
-# launchd (optional, login-persistent path)
-LABEL="com.mac-llm-lab.opencode-server"
+# launchd (optional, login-persistent path) — own label per tier
+LABEL="com.mac-llm-lab.opencode-server${TAG}"
 PLIST_TEMPLATE="$ROOT/launchd/$LABEL.plist"
 PLIST_DEST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
-# --- tier-64 sampler + ctx/batch from models.conf (single source of truth) --
+# --- per-tier sampler + ctx/batch from models.conf (single source of truth) --
 # shellcheck source=../models.conf
 source "$ROOT/models.conf"
 eval "GGUF=\"\$TIER_${TIER}_GGUF\""
@@ -70,7 +83,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 preflight() {
   [[ -x "$BINARY" ]] || die "llama-server not found/executable: $BINARY"
   [[ -f "$GGUF"   ]] || die "tier-${TIER} GGUF not found: $GGUF (see models.conf)"
-  [[ -f "$TEMPLATE" ]] || die "corrected template missing: $TEMPLATE (#004)"
+  [[ -f "$TEMPLATE" ]] || die "corrected template missing: $TEMPLATE (#004 tier-64 / #018 tier-16)"
   for v in CTX BATCH TEMP TOP_P TOP_K REPEAT_PENALTY PRESENCE_PENALTY; do
     [[ -n "${!v}" ]] || die "TIER_${TIER}_${v} not set in models.conf"
   done
@@ -87,7 +100,7 @@ running_pid() {
 }
 
 # The non-grammar boot incantation — same shape as verify-template.sh boot(),
-# extended with the tier-64 sampler, thinking-off kwarg, and generous -n.
+# extended with the per-tier sampler, thinking-off kwarg, and generous -n.
 cmd_start() {
   preflight
   if running_pid >/dev/null; then
@@ -145,32 +158,40 @@ cmd_status() {
 
 cmd_health() { if is_green; then echo "green: $BASE/health"; else echo "unreachable: $BASE/health"; exit 1; fi; }
 
-# /apply-template probe — proves the live server carries the #004 system-not-first
-# fix AND the closed <think></think> thinking-off prefill. Template-only (no GPU).
+# /apply-template probe — proves the LIVE server carries the system-not-first fix
+# (#004 tier-64 / #018 tier-16) AND the closed <think></think> thinking-off prefill
+# (#017). Template-only (no GPU). Load-bearing for OpenCode: no claw.gbnf backstop.
+_probe_prompt() { curl -s -X POST "$BASE/apply-template" -H 'content-type: application/json' -d "$1" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin).get("prompt",""))' 2>/dev/null || true; }
 cmd_probe() {
   is_green || die "server not green on :$PORT — start it first"
-  local body out fails=0
+  local out fails=0
   # 1) system-not-first: system content must survive and emit an <|im_start|>system block
-  body='{"messages":[{"role":"user","content":"hi"},{"role":"system","content":"SYSTEM_SENTINEL_42"},{"role":"user","content":"2+2?"}]}'
-  out="$(curl -s -X POST "$BASE/apply-template" -H 'content-type: application/json' -d "$body" \
-        | python3 -c 'import json,sys; print(json.load(sys.stdin).get("prompt",""))' 2>/dev/null || true)"
+  out="$(_probe_prompt '{"messages":[{"role":"user","content":"hi"},{"role":"system","content":"SYSTEM_SENTINEL_42"},{"role":"user","content":"2+2?"}]}')"
   if [[ "$out" == *"SYSTEM_SENTINEL_42"* && "$out" == *"<|im_start|>system"* ]]; then
-    echo "  PASS  system-not-first fix (#004): system content preserved + <|im_start|>system emitted"
+    echo "  PASS  system-not-first fix: system content preserved + <|im_start|>system emitted"
   else
-    echo "  FAIL  system-not-first fix (#004): system content dropped"; fails=$((fails+1))
+    echo "  FAIL  system-not-first fix: system content dropped/500"; fails=$((fails+1))
   fi
-  # 2) thinking-off: server's launch-time enable_thinking:false default must yield a
-  #    CLOSED <think>\n\n</think> prefill for a plain request (no per-request kwargs).
-  body='{"messages":[{"role":"user","content":"hi"}]}'
-  out="$(curl -s -X POST "$BASE/apply-template" -H 'content-type: application/json' -d "$body" \
-        | python3 -c 'import json,sys; print(json.load(sys.stdin).get("prompt",""))' 2>/dev/null || true)"
+  # 2) thinking-off (launch default): the server's launch-time enable_thinking:false
+  #    must yield a CLOSED <think>\n\n</think> prefill for a PLAIN request (no kwargs) —
+  #    this is what real OpenCode traffic relies on (it sends no per-request kwarg).
+  out="$(_probe_prompt '{"messages":[{"role":"user","content":"hi"}]}')"
   if [[ "$out" == *$'<think>\n\n</think>'* ]]; then
-    echo "  PASS  thinking-off: closed <think></think> prefill (enable_thinking:false in effect)"
+    echo "  PASS  thinking-off (launch default): closed <think></think> on a plain request"
   else
-    echo "  FAIL  thinking-off: no closed <think></think> prefill"; fails=$((fails+1))
+    echo "  FAIL  thinking-off (launch default): no closed <think></think> prefill"; fails=$((fails+1))
+  fi
+  # 3) thinking-off (#017 per-request form): explicit chat_template_kwargs.enable_thinking
+  #    :false must ALSO produce the closed prefill (the override the harness route uses).
+  out="$(_probe_prompt '{"messages":[{"role":"user","content":"hi"}],"chat_template_kwargs":{"enable_thinking":false}}')"
+  if [[ "$out" == *$'<think>\n\n</think>'* ]]; then
+    echo "  PASS  thinking-off (#017 per-request): explicit enable_thinking:false -> closed prefill"
+  else
+    echo "  FAIL  thinking-off (#017 per-request): explicit enable_thinking:false NOT honored"; fails=$((fails+1))
   fi
   [[ "$fails" -eq 0 ]] || die "$fails probe check(s) failed"
-  echo "probe: all checks passed"
+  echo "probe: all checks passed (tier-$TIER, $BASE)"
 }
 
 # --- optional launchd path (login-persistent) ------------------------------

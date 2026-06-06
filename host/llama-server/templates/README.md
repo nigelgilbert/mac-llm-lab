@@ -1,27 +1,40 @@
-# Corrected Qwen3.6 chat template (Config B / OpenCode serving)
+# Corrected Qwen3.5/3.6 chat templates (Config B / OpenCode serving)
 
-Vendored chat template for the **second, OpenCode-dedicated `llama-server`**
-(Config B in the [OpenCode A/B plan](../../test/docs/OPENCODE-HARNESS-AB-PLAN.md)).
-It fixes the stock Qwen3.6 template's mishandling of a request whose **system
-message is not first** — the request shape OpenCode produces — while leaving the
-native `<tool_call>` emission and `enable_thinking` behaviour byte-identical to
-stock.
+Vendored chat templates for the **OpenCode-dedicated `llama-server`s**
+(Config B in the [OpenCode A/B plan](../../test/docs/OPENCODE-HARNESS-AB-PLAN.md)),
+one per tier. Each fixes its stock template's mishandling of a request whose
+**system message is not first** — the request shape OpenCode produces — while
+leaving the native `<tool_call>` emission and `enable_thinking` behaviour
+byte-identical to stock.
 
-Issue: [#004](../../../issues/004-vendor-corrected-jinja-template.md).
+- **tier-64** `qwen36-corrected.jinja` (#004) — stock silently *drops* the system message.
+- **tier-16** `qwen35-corrected.jinja` (#018) — stock *raises HTTP 500*; opposite
+  `enable_thinking` default polarity.
+
+Issues: [#004](../../../issues/004-vendor-corrected-jinja-template.md) (tier-64),
+[#018](../../../issues/018-tier16-opencode-serving.md) (tier-16).
 Consumed by [#005](../../../issues/005-second-llama-server-config.md) via
-`--chat-template-file host/llama-server/templates/qwen36-corrected.jinja`.
+`--chat-template-file host/llama-server/templates/qwen3{5,6}-corrected.jinja`.
 
 > This is the **Config B** template only. The production **claw** path (Config A,
 > `:11435`) reads the template **embedded in the GGUF** and is unaffected — claw is
 > not served with `--chat-template-file`. Don't point the claw launchd plist at
 > this file.
 
-| | |
-|---|---|
-| Vendored template | [`qwen36-corrected.jinja`](qwen36-corrected.jinja) |
-| Reproducible verifier | [`verify-template.sh`](verify-template.sh) |
-| Applies to | tier-64 — `Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf` |
-| Tier-16 (`Qwen3.5-9B`) | **out of scope here** — validated separately in [#018](../../../issues/018-tier16-opencode-serving.md); the 3 tier-64 fixes may not all transfer to the 9B |
+| | tier-64 | tier-16 |
+|---|---|---|
+| Vendored template | [`qwen36-corrected.jinja`](qwen36-corrected.jinja) | [`qwen35-corrected.jinja`](qwen35-corrected.jinja) |
+| Reproducible verifier | [`verify-template.sh`](verify-template.sh) | same (`TEMPLATE=…/qwen35-corrected.jinja`) |
+| Applies to | `Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf` | `Qwen3.5-9B-IQ4_XS.gguf` |
+| Issue | [#004](../../../issues/004-vendor-corrected-jinja-template.md) | [#018](../../../issues/018-tier16-opencode-serving.md) |
+| Served by | `opencode-server` (`:11436`) | `OPENCODE_TIER=16 opencode-server` (`:11437`) |
+
+> **Tier-16 (`qwen35-corrected.jinja`, #018):** same two-region system-not-first fix, but
+> the 9B fails *harder* than the 35B — stock **HTTP 500**s (`raise_exception('System message
+> must be at the beginning.')`) where the 35B silently dropped. The 9B's `enable_thinking`
+> branch also has the **opposite default polarity** (closed-think default), preserved
+> byte-for-byte. Which of the 3 tier-64 fixes the 9B actually needed + the live tool-call
+> validation: [docs/TOOL-CALL-VALIDATION-TIER16.md](../docs/TOOL-CALL-VALIDATION-TIER16.md).
 
 ---
 

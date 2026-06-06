@@ -34,6 +34,8 @@
 #   REPEATS=3 ./validate-tool-calls.sh       # more samples per prompt (default 2)
 #   SAVE_DIR=/tmp/tc006 ./validate-tool-calls.sh   # also dump raw responses
 #   BASE=http://127.0.0.1:11436 ./validate-tool-calls.sh
+#   # tier-16 reuse (#018): BASE=http://127.0.0.1:11437 MODEL=opencode-16 ./validate-tool-calls.sh
+#   #   → host/llama-server/docs/TOOL-CALL-VALIDATION-TIER16.md (Qwen3.5-9B verdict)
 #
 # Exit 0 iff every run (both modes) emitted a parsed tool_calls[], no XML leak.
 # ============================================================================
@@ -197,7 +199,7 @@ PY
 }
 
 echo "=============================================================================="
-echo " #006 LIVE tool-call validation — $BASE  (build 5594d13, Qwen3.6-35B-A3B)"
+echo " #006 LIVE tool-call validation — $BASE  model=$MODEL  (build 5594d13)"
 echo " battery: ${#CASES[@]} prompts x ${REPEATS} repeats x 2 modes (non-stream + stream)"
 echo "        = $(( ${#CASES[@]} * REPEATS * 2 )) live generations"
 echo "=============================================================================="
