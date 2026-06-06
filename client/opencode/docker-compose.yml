@@ -27,6 +27,16 @@ services:
       # Lets host.docker.internal resolve to the host when OpenCode runs on the
       # lab box itself (OrbStack maps host-gateway to the host).
       - "host.docker.internal:host-gateway"
+      # Black-hole models.dev. At startup OpenCode fetches the models.dev
+      # catalog over HTTPS with NO effective timeout; an intermittently-stalled
+      # Cloudflare connection wedges `opencode run` SILENTLY at "format init"
+      # forever (observed: 13+ min, zero output, no request to :11436). Our
+      # provider (`llama-local`) is fully declared in opencode.json and the
+      # openai-compatible SDK is bundled in the binary, so the catalog is never
+      # needed — pointing models.dev at localhost makes the fetch fail fast and
+      # OpenCode falls straight through to a clean run. See
+      # docs/HEADLESS-ONESHOT.md (#009).
+      - "models.dev:127.0.0.1"
     # Single dev-server port, mirroring claw-code: tasks in /workspace may start a
     # framework dev server on 8080.
     ports:

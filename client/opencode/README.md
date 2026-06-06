@@ -80,4 +80,7 @@ docker compose run --rm opencode curl -s -o /dev/null -w '%{http_code}\n' \
   host.docker.internal:11436/health      # -> 200
 ```
 
-A full one-shot agent run (`opencode run "<prompt>"`) is wired in #009.
+A full headless one-shot agent run (`opencode run "<prompt>"`) is proven end-to-end
+in #009 — exit/cleanup semantics and the **models.dev bootstrap-hang fix** (now baked
+into [`docker-compose.yml`](docker-compose.yml) as `extra_hosts: models.dev:127.0.0.1`)
+are recorded in [`docs/HEADLESS-ONESHOT.md`](docs/HEADLESS-ONESHOT.md).

@@ -19,10 +19,18 @@ human observation before they're trusted in automation.
 
 ## Acceptance criteria
 
-- [ ] `opencode run "<prompt>"` against the wired container edits a mounted `/workspace` file end-to-end
-- [ ] The process exits cleanly with no orphaned client/server process left in the container
-- [ ] Exit-code semantics documented (success / failure / partial) for use by `runOpenCode`
-- [ ] A reproducible one-shot invocation (prompt + expected workspace mutation) is recorded
+- [x] `opencode run "<prompt>"` against the wired container edits a mounted `/workspace` file end-to-end
+- [x] The process exits cleanly with no orphaned client/server process left in the container
+- [x] Exit-code semantics documented (success / failure / partial) for use by `runOpenCode`
+- [x] A reproducible one-shot invocation (prompt + expected workspace mutation) is recorded
+
+**Done — see [`client/opencode/docs/HEADLESS-ONESHOT.md`](../client/opencode/docs/HEADLESS-ONESHOT.md).**
+Headline: the one-shot works, exits 0, orphans nothing — but bootstrap's un-timed
+**models.dev catalog fetch wedges `opencode run` silently at `format init`** until
+black-holed (fix committed to `docker-compose.yml`). Exit codes are coarse (`0` ok /
+`1` any pre-flight error / `130`,`143` on signal) and **absent on hang** (dead endpoint
+mid-stream also hangs) → `runOpenCode` must use the workspace-only oracle + its own
+`timeoutMs` kill.
 
 ## Blocked by
 
