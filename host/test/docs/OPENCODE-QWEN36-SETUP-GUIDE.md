@@ -37,10 +37,17 @@ so they don't compromise the "vanilla" framing.
    = false` (`host/litellm/litellm-config.yaml`; `model_configs.json:475` "thinking
    suppressed via litellm route"), overriding the server's launch-time `true`. So
    thinking-off is **apples-to-apples at tier-64, not a B-only handicap.**
-   **Tier-16 is OPEN:** `clawModel` routes all tiers through `claw-llama` (would force
-   off), which contradicts the manifest's tier-16 "enable_thinking forced true" note.
-   Confirm what claw-16 actually runs, then match OpenCode-16 to it before trusting
-   tier-16 numbers (default: both OFF).
+   **Tier-16 RESOLVED (issue #017 → [TIER16-THINKING-PARITY-DECISION.md](TIER16-THINKING-PARITY-DECISION.md)):
+   both OFF.** claw-16 runs thinking-off under the harness — the `claw-llama` route's
+   `enable_thinking:false` wins over the server's launch-time `true` (verified live on
+   `Qwen3.5-9B-IQ4_XS` + build `b1-5594d13`); the manifest "forced true" note refers to
+   the launch flag, not the effective per-request setting. OpenCode-16 matches with
+   `--chat-template-kwargs '{"enable_thinking":false}'` — and because OpenCode has **no
+   `claw.gbnf` backstop**, #018 must assert the closed-`<think></think>` prefill via
+   `/apply-template` (the launch-flag syntax is deprecated on this build but still
+   functions; fall back to `--reasoning off` if a future build ignores it). *Skew:*
+   production claw-16 (`anthropic/claw` route) is thinking-on; the A/B measures the
+   harness off-mode.
 3. **No `claw.gbnf`** on this instance — OpenCode needs native tool-call emission,
    not claw's constrained wrapper.
 

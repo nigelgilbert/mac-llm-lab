@@ -41,11 +41,18 @@ The two setups, end-to-end:
     `model_configs.json:475` "thinking suppressed via litellm route"). OpenCode
     forces it via `--chat-template-kwargs '{"enable_thinking":false}'`. The setup
     guide's "matches claw's suppression" claim is vindicated.
-  - tier-16 — **OPEN, gating acceptance criterion.** `clawModel` defaults to the
-    single `anthropic/claw-llama` route for all tiers, which would force thinking
-    *off* — contradicting the manifest's tier-16 "enable_thinking forced true" note.
-    Must (1) confirm what claw-16 actually runs under the harness, then (2) force
-    OpenCode-16 to match. Default stance: **both OFF** unless claw-16 is proven ON.
+  - tier-16 — **RESOLVED 2026-06-06 (issue #017): both OFF.** See
+    [TIER16-THINKING-PARITY-DECISION.md](TIER16-THINKING-PARITY-DECISION.md). claw-16
+    runs thinking **OFF** under the harness: it routes through `anthropic/claw-llama`
+    (`enable_thinking:false`), and a live `/apply-template` probe on the tier-16 GGUF
+    (`Qwen3.5-9B-IQ4_XS`) + pinned build `b1-5594d13` confirms the per-request override
+    **wins** over the server's launch-time `true` (closed `<think></think>` prefill).
+    The manifest "enable_thinking forced true" note describes the *server launch flag*,
+    which the route overrides — no real contradiction. OpenCode-16 matches with
+    `--chat-template-kwargs '{"enable_thinking":false}'` (consumed by #018; verify via
+    `/apply-template` since OpenCode has no grammar backstop). **Skew noted:**
+    *production* claw-16 (`anthropic/claw` route, no override) is thinking-**ON** — the
+    A/B characterizes the harness (off) mode, not production.
 
 ---
 
@@ -247,7 +254,11 @@ served and driven the way vanilla OpenCode would."
 ---
 
 ## 5. Known gotchas / open questions
-- **tier-16 thinking parity** (§0) — gating; resolve before trusting tier-16 numbers.
+- **tier-16 thinking parity** (§0) — **RESOLVED** (issue #017): both OFF;
+  [TIER16-THINKING-PARITY-DECISION.md](TIER16-THINKING-PARITY-DECISION.md). Harness
+  claw-16 = thinking-off (verified by live `/apply-template` probe); production claw-16
+  = thinking-on (skew noted). OpenCode-16 flag: `--chat-template-kwargs
+  '{"enable_thinking":false}'`, verified on OpenCode's server in #018.
 - OpenCode session-log **location + format** unknown → blocks the §4.4 adapter.
 - `opencode run` exit-code + process-cleanup semantics unconfirmed → verify before
   wiring `runOpenCode`.
