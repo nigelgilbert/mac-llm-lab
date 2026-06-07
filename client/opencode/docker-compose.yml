@@ -13,16 +13,25 @@ services:
       # repo-visible and editable without an image rebuild. OpenCode reads its
       # global config from $XDG_CONFIG_HOME/opencode; the container runs as root,
       # so that resolves to /root/.config/opencode/opencode.json.
-      - ./opencode.json:/root/.config/opencode/opencode.json:ro
+      #
+      # TIER-SELECTABLE (#019): the source config is `${OPENCODE_CONFIG_JSON}`,
+      # defaulting to ./opencode.json (tier-64, baseURL :11436). The phase-swap
+      # driver (run-config-ab.sh) sets OPENCODE_CONFIG_JSON=./opencode.16.json for
+      # TIER=16 so OpenCode dials the tier-16 server on :11437 instead. WITHOUT
+      # this the tier-16 phase silently dials the dead :11436 and every cell
+      # ConnectionRefused-loops until its budget expires (iters=1, 0 tokens) — the
+      # #019 sweep bug. The port lives in the JSON, not here.
+      - ${OPENCODE_CONFIG_JSON:-./opencode.json}:/root/.config/opencode/opencode.json:ro
     working_dir: /workspace
     environment:
       # CRA reads HOST; harmless for others. Vite/Next still need their own --host
       # flag. Mirrors claw-code so the shared task suite behaves the same here.
       - HOST=0.0.0.0
     # B-side talks STRAIGHT to the second llama-server — NO ANTHROPIC_BASE_URL,
-    # NO LiteLLM bridge. The baseURL (host.docker.internal:11436/v1) lives in
-    # opencode.json, not here; that endpoint is the #005 OpenCode-dedicated
-    # llama-server (tier-64, alias `opencode`).
+    # NO LiteLLM bridge. The baseURL lives in the mounted config (above), not
+    # here: tier-64 → opencode.json (:11436, #005, alias `opencode`); tier-16 →
+    # opencode.16.json (:11437, #018, alias `opencode-16`), selected by the
+    # OPENCODE_CONFIG_JSON mount var.
     extra_hosts:
       # Lets host.docker.internal resolve to the host when OpenCode runs on the
       # lab box itself (OrbStack maps host-gateway to the host).

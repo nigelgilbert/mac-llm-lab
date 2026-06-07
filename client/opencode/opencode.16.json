@@ -1,0 +1,19 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "llama-local": {
+      "name": "Qwen3.5-9B IQ4_XS (llama.cpp, tier-16 Config B)",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://host.docker.internal:11437/v1",
+        "apiKey": "sk-local-no-auth"
+      },
+      "models": {
+        "opencode": {
+          "name": "Qwen3.5 9B IQ4_XS (tier-16, server alias: opencode-16)"
+        }
+      }
+    }
+  },
+  "model": "llama-local/opencode"
+}

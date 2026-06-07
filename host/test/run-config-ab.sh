@@ -48,6 +48,8 @@
 #   CLAW_MODEL_CONFIG_ID   claw side model_config_id  (default: tier-64 v1-prod prod id)
 #   PER_TEST_TIMEOUT   per-cell wallclock ceiling, seconds       (default: 600)
 #   PHASE_SWAP         1 = launchd headroom swap (HITL)          (default: 0)
+#   SKIP_PHASE_A       1 = reuse REGISTRY_OUT's claw rows, run   (default: 0)
+#                      Phase B only (needs REGISTRY_OUT existing) (#019)
 #   REGISTRY_OUT       explicit shared-registry path             (default: auto-timestamped)
 # ============================================================================
 set -euo pipefail
@@ -62,6 +64,12 @@ TIER="${TIER:-64}"
 CLAW_MODEL_CONFIG_ID="${CLAW_MODEL_CONFIG_ID:-qwen36-35b-a3b-q4kxl-ctx65k-v1prod-pp01}"
 PER_TEST_TIMEOUT="${PER_TEST_TIMEOUT:-600}"
 PHASE_SWAP="${PHASE_SWAP:-0}"
+# SKIP_PHASE_A=1 (#019): reuse an existing registry's claw-rig rows and run ONLY
+# Phase B (opencode-a), appending to that same file, then gate. For re-running a
+# botched Phase B (e.g. the #019 oc-16 :11437 port wiring bug) without re-burning a
+# good Phase A — and without bringing production claw down at all (oc never touches
+# :11435). REQUIRES REGISTRY_OUT=<existing non-empty file under .claw-runtime>.
+SKIP_PHASE_A="${SKIP_PHASE_A:-0}"
 
 TEST_IMAGE="${TEST_IMAGE:-mac-llm-lab-test:local}"
 DOCKER_CLI_IMAGE="${DOCKER_CLI_IMAGE:-docker:cli}"
@@ -75,6 +83,13 @@ CLAW_HEALTH="http://127.0.0.1:11435/health"
 BRIDGE_HEALTH="http://127.0.0.1:4000/health/liveliness"
 OC_PORT="$([ "$TIER" = "16" ] && echo 11437 || echo 11436)"
 OC_HEALTH="http://127.0.0.1:$OC_PORT/health"
+# Tier-selectable OpenCode client config (#019). The OpenCode container's serving
+# endpoint lives in its mounted opencode(.NN).json, NOT in OC_PORT — OC_PORT only
+# health-checks the server. Phase B MUST pass the matching config or OpenCode dials
+# the wrong port and every cell ConnectionRefused-loops to timeout (iters=1, 0
+# tokens). tier-64 → opencode.json (:11436); tier-16 → opencode.16.json (:11437).
+# Consumed by client/opencode/docker-compose.yml's ${OPENCODE_CONFIG_JSON} mount.
+OC_CONFIG_JSON="$([ "$TIER" = "16" ] && echo ./opencode.16.json || echo ./opencode.json)"
 
 # Shared registry both phases append to (path-matched → same host file in both
 # containers). Lives under the gitignored runtime root by convention.
@@ -91,6 +106,12 @@ case "$HOST_REG" in
   *) echo "ERROR: REGISTRY_OUT must be a path under $CLAW_RT_DIR (Phase A writes there via the compose mount); got: $HOST_REG" >&2; exit 1 ;;
 esac
 REGNAME="$(basename "$HOST_REG")"
+# SKIP_PHASE_A preconditions: there must already BE claw rows to pair against, and
+# downing claw for headroom makes no sense when claw isn't running this sweep.
+if [ "$SKIP_PHASE_A" = 1 ]; then
+  [ "$PHASE_SWAP" = 1 ] && err "SKIP_PHASE_A=1 is incompatible with PHASE_SWAP=1 (no claw phase to make headroom for)"
+  [ -s "$HOST_REG" ] || err "SKIP_PHASE_A=1 reuses existing claw rows — set REGISTRY_OUT to an existing non-empty registry under $CLAW_RT_DIR; got empty/missing: $HOST_REG"
+fi
 # Per-phase shared workspace H for the opencode sibling (mount contract §"What
 # #013 must do"). Gitignored, host-shareable, sibling of the oc sidecar root.
 H="$REPO_DIR/client/opencode/.opencode-runtime/phase-ws"
@@ -122,8 +143,12 @@ docker image inspect "$TEST_IMAGE" >/dev/null 2>&1 \
   || err "missing image $TEST_IMAGE — build it: (cd $SCRIPT_DIR && docker compose build)"
 docker image inspect "$DOCKER_CLI_IMAGE" >/dev/null 2>&1 \
   || err "missing image $DOCKER_CLI_IMAGE — pull it: docker pull $DOCKER_CLI_IMAGE"
-[ "$(http "$CLAW_HEALTH")"   = 200 ] || err "claw llama-server not green at $CLAW_HEALTH — this driver requires the production claw server up (it will NOT start one)"
-[ "$(http "$BRIDGE_HEALTH")" = 200 ] || err "LiteLLM bridge not green at $BRIDGE_HEALTH — start it: (cd $REPO_DIR/host/litellm && docker compose up -d)"
+# claw + bridge back ONLY Phase A; skip their preflight when Phase A is skipped
+# (Phase B/opencode talks straight to the oc server on :$OC_PORT, never :11435/:4000).
+if [ "$SKIP_PHASE_A" != 1 ]; then
+  [ "$(http "$CLAW_HEALTH")"   = 200 ] || err "claw llama-server not green at $CLAW_HEALTH — this driver requires the production claw server up (it will NOT start one)"
+  [ "$(http "$BRIDGE_HEALTH")" = 200 ] || err "LiteLLM bridge not green at $BRIDGE_HEALTH — start it: (cd $REPO_DIR/host/litellm && docker compose up -d)"
+fi
 
 # ---- cleanup-on-exit: always restore production state ----------------------
 STARTED_OC=0      # set to 1 iff we start the oc server (→ we stop it)
@@ -179,6 +204,11 @@ log "    harness_version (GIT_SHA) = $GIT_SHA"
 # Phase A — claw-rig
 # ============================================================================
 log ""
+if [ "$SKIP_PHASE_A" = 1 ]; then
+log "==> Phase A: SKIPPED (SKIP_PHASE_A=1) — reusing existing claw-rig rows in:"
+log "    $HOST_REG"
+A_RC=0
+else
 log "==> Phase A: claw-rig (CONFIG=claw-rig, claw llama-server :11435)"
 if [ "$PHASE_SWAP" = 1 ]; then
   # Headroom mode: ensure the oc server is DOWN so claw runs with full memory.
@@ -224,6 +254,7 @@ docker compose --env-file "$ENV_FILE" -f "$TEST_COMPOSE" run --rm \
 A_RC=$?
 set -e
 log "[A] claw phase exit rc=$A_RC (cell failures are tolerated; rows still emitted)"
+fi
 
 # ============================================================================
 # Phase B — opencode-a
@@ -279,6 +310,7 @@ docker run --rm \
   -e CONFIG=opencode-a \
   -e HOST_WORKSPACE="$H" \
   -e TIER="$TIER" \
+  -e OPENCODE_CONFIG_JSON="$OC_CONFIG_JSON" \
   -e TIER_EVAL_FILTER="$FILTER" \
   -e PER_TEST_TIMEOUT="$PER_TEST_TIMEOUT" \
   -e RUN_REGISTRY_EMIT=1 \
