@@ -2,7 +2,11 @@
 
 **Type**: AFK
 
-**Status:** ⏳ Blocked by #011 (#001–#003 met)
+**Status:** ✅ Done — `deep-equal` ran green under both configs via the workspace oracle:
+the opencode-a row carried `config_id=opencode-a` + the tier-64 Config-B `model_config_id`
+(`…v1prod-pp01-opencode-a`), and the same test rowed unchanged under `claw-rig` (no
+regression). The end-to-end path is further exercised at scale by #013's gate and the #014
+sweep (512 rows, config_id discipline enforced on every row).
 
 ## Parent
 
@@ -19,10 +23,10 @@ groupable row with no transcript adapter.
 
 ## Acceptance criteria
 
-- [ ] A chosen tier-eval test runs to completion under `CONFIG=opencode-a` against the container
-- [ ] Pass/fail is decided by the workspace post-script; a correct run is scored pass
-- [ ] A registry row is written with `config_id: opencode-a` and the tier's Config-B `model_config_id`
-- [ ] The same test still runs and rows correctly under `CONFIG=claw-rig` (no regression)
+- [x] A chosen tier-eval test runs to completion under `CONFIG=opencode-a` against the container — `deep-equal`
+- [x] Pass/fail is decided by the workspace post-script; a correct run is scored pass — `verify.js` (exit 0)
+- [x] A registry row is written with `config_id: opencode-a` and the tier's Config-B `model_config_id`
+- [x] The same test still runs and rows correctly under `CONFIG=claw-rig` (no regression)
 
 ## Blocked by
 

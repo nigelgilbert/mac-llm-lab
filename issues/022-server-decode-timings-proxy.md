@@ -3,9 +3,10 @@
 **Type**: AFK
 
 **Status:** ✅ Done — capture mechanism + parse/join library shipped behind
-`OPENCODE_SERVER_TIMINGS=1`; runner (#010) / report (#016) wiring is a documented
-contract awaiting those tickets. See
-[OPENCODE-SERVER-TIMINGS.md](../host/test/docs/OPENCODE-SERVER-TIMINGS.md).
+`OPENCODE_SERVER_TIMINGS=1`. #010 (`runOpenCode`) landed *without* timings capture by
+design — the ordinal join needs #021's iteration records — so the cursor-bracketing +
+join wiring lands with **#021** (transcript adapter) and the report render with
+**#016**. See [OPENCODE-SERVER-TIMINGS.md](../host/test/docs/OPENCODE-SERVER-TIMINGS.md).
 (optional / post-v1)
 
 ## Parent

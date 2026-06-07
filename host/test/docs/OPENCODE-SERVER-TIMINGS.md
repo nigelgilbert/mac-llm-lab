@@ -1,8 +1,10 @@
 # Config-B server prompt/decode timings (issue #022)
 
-**Status:** capture mechanism + parse/join library shipped. Wiring into the runner
-(#010) and report (#016) happens when those land — the contract below is what they
-call. **Optional / post-v1. Opt-in. Off by default.**
+**Status:** capture mechanism + parse/join library shipped. #010 (`runOpenCode`)
+landed *without* timings capture by design — the ordinal join needs #021's iteration
+records — so the cursor-bracketing + join wiring lands with **#021** (transcript
+adapter) and the report render with **#016**. The contracts below are what those call.
+**Optional / post-v1. Opt-in. Off by default.**
 
 ## Why this exists
 
@@ -42,7 +44,11 @@ ordinal pairing claw ultimately uses after its time-window slice.)
 
 This needs no new runtime component and adds **no hop to the measured wall-clock**.
 
-### Runner integration contract (#010 `runOpenCode`)
+### Runner integration contract (wired by #021, brackets `runOpenCode`)
+
+> #010 shipped `runOpenCode` **without** these calls by design — the ordinal join has
+> nothing to attach to until #021 emits Config-B iteration records. #021 adds the
+> cursor-bracketing around the `opencode run` spawn plus the join below.
 
 ```js
 import {
