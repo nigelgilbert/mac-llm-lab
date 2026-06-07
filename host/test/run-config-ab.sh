@@ -79,8 +79,18 @@ OC_HEALTH="http://127.0.0.1:$OC_PORT/health"
 # Shared registry both phases append to (path-matched → same host file in both
 # containers). Lives under the gitignored runtime root by convention.
 STAMP="$(date +%Y%m%d-%H%M%S)"
-REGNAME="run_registry.config-ab-${STAMP}.jsonl"
-HOST_REG="${REGISTRY_OUT:-$REPO_DIR/host/test/.claw-runtime/$REGNAME}"
+HOST_REG="${REGISTRY_OUT:-$REPO_DIR/host/test/.claw-runtime/run_registry.config-ab-${STAMP}.jsonl}"
+# Phase A writes its row via the compose mount (host/test/.claw-runtime → the test
+# container's /workspace/.claw-runtime), so it can ONLY land a file in that dir. Derive
+# REGNAME from HOST_REG's basename and REQUIRE HOST_REG to live under .claw-runtime — else
+# the two phases write different host files and the gate sees claw=0 (the REGISTRY_OUT
+# footgun, #014). Fail loud here (before any server/container is touched; trap not yet set).
+CLAW_RT_DIR="$REPO_DIR/host/test/.claw-runtime"
+case "$HOST_REG" in
+  "$CLAW_RT_DIR"/*) : ;;
+  *) echo "ERROR: REGISTRY_OUT must be a path under $CLAW_RT_DIR (Phase A writes there via the compose mount); got: $HOST_REG" >&2; exit 1 ;;
+esac
+REGNAME="$(basename "$HOST_REG")"
 # Per-phase shared workspace H for the opencode sibling (mount contract §"What
 # #013 must do"). Gitignored, host-shareable, sibling of the oc sidecar root.
 H="$REPO_DIR/client/opencode/.opencode-runtime/phase-ws"

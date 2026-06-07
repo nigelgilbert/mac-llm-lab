@@ -443,7 +443,7 @@ describe('buildOpenCodeArtifacts — writes sidecars; degrades on no DB', () => 
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const EVIDENCE_DB = process.env.OPENCODE_EVIDENCE_DB
-  || path.resolve(HERE, '../../../client/opencode/.opencode-runtime/ws020-evidence/opencode.db');
+  || path.resolve(HERE, '../../../../client/opencode/.opencode-runtime/ws020-evidence/opencode.db');
 const haveEvidence = (() => { try { return fs.existsSync(EVIDENCE_DB); } catch { return false; } })();
 
 describe('readOpenCodeSession + normalize — real #020 evidence DB (gated)', () => {
