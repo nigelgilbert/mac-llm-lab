@@ -1,0 +1,95 @@
+#!/usr/bin/env node
+// #019 loose-end (synthesis) — normalized-treatment bootstrap CI for tier-16.
+//
+// The canonical tier-16 verdict (OPENCODE-AB-TIER16-VERDICT.md) reports a point
+// estimate for the eligibility-asymmetry sensitivity (delta −7.7 → −5.5 pp when
+// claw's 17 context-overflow `harness_error` rows are counted as eligible fails
+// instead of dropped) but NO confidence interval — the canonical renderer drops
+// harness_error rows before bootstrapping, so it can only produce the −7.7 CI.
+//
+// This script closes that loose end. It reclassifies the claw-side
+// context-overflow `harness_error` rows as eligible FAILS (passed=false,
+// terminal_status → 'timeout', i.e. symmetric with how OpenCode's identical
+// budget-exhaustion failure mode already surfaces), then runs the SAME #015
+// statistic (lib/paired_bootstrap.js, paired by test_id, B=10000, seed
+// 0xc0ffee) to get a real CI on the normalized delta.
+//
+// This is a POST-HOC sensitivity analysis, not the pre-registered §0a decision.
+// The canonical verdict stands on the drop-harness_error rule. This only
+// quantifies the uncertainty on the asymmetry-corrected estimate so the paper
+// can state "−5.5 pp, 90% CI [...]" instead of a bare point.
+//
+// Usage:
+//   node scripts/config-ab-normalized-ci.mjs <registry.jsonl> --tier 16 [--seed 0xc0ffee] [--B 10000]
+//
+// Exit codes: 0 on a successful render; 2 = bad args.
+
+import { readRegistry } from '../lib/registry.js';
+import { pairedBootstrapCI } from '../lib/paired_bootstrap.js';
+
+const TREATMENT = 'opencode-a';
+const BASELINE = 'claw-rig';
+const MARGIN_PP = 5;
+
+function parseArgs(argv) {
+  const a = argv.slice(2);
+  const opts = { seed: 0xc0ffee, B: 10000 };
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === '--tier') opts.tier = Number.parseInt(a[++i], 10);
+    else if (a[i] === '--seed') opts.seed = Number(a[++i]);
+    else if (a[i] === '--B') opts.B = Number.parseInt(a[++i], 10);
+    else if (!opts.registryPath) opts.registryPath = a[i];
+    else { console.error(`unexpected arg: ${a[i]}`); process.exit(2); }
+  }
+  if (!opts.registryPath) {
+    console.error('usage: config-ab-normalized-ci.mjs <registry.jsonl> --tier 16 [--seed N] [--B N]');
+    process.exit(2);
+  }
+  return opts;
+}
+
+function main() {
+  const { registryPath, tier, seed, B } = parseArgs(process.argv);
+  const all = readRegistry({ registryPath });
+  const rows = tier == null ? all : all.filter((r) => r.hardware_tier === tier);
+
+  // Reclassify: claw-side context-overflow harness_error → eligible fail.
+  // (All tier-16 claw harness_error rows are context_overflow; OpenCode's same
+  // failure mode is already an eligible `timeout` fail, so this makes the two
+  // serving stacks symmetric in how budget exhaustion counts against them.)
+  let reclassified = 0;
+  const normalized = rows.map((r) => {
+    if (
+      r.config_id === BASELINE &&
+      r.terminal_status === 'harness_error' &&
+      r.harness_error === 'context_overflow'
+    ) {
+      reclassified += 1;
+      return { ...r, passed: false, terminal_status: 'timeout' };
+    }
+    return r;
+  });
+
+  const canonical = pairedBootstrapCI(rows, { tier, treatment: TREATMENT, baseline: BASELINE, seed, B });
+  const norm = pairedBootstrapCI(normalized, { tier, treatment: TREATMENT, baseline: BASELINE, seed, B });
+
+  const fmt = (ci) =>
+    `delta ${(ci.aggregateDelta * 100 >= 0 ? '+' : '')}${(ci.aggregateDelta * 100).toFixed(2)}pp  ` +
+    `90% CI [${(ci.ci.lower * 100).toFixed(2)}, ${(ci.ci.upper * 100).toFixed(2)}]pp`;
+
+  console.log('=== tier-16 normalized-treatment sensitivity (post-hoc) ===');
+  console.log(`registry      : ${registryPath}`);
+  console.log(`bootstrap     : B=${B}  seed=0x${(seed >>> 0).toString(16)}`);
+  console.log(`reclassified  : ${reclassified} claw context-overflow harness_error rows → eligible fails`);
+  console.log('');
+  console.log(`canonical (drop overflow)     : ${fmt(canonical)}   [pre-registered]`);
+  console.log(`normalized (overflow = fail)  : ${fmt(norm)}   [sensitivity]`);
+  console.log('');
+  const normLb = norm.ci.lower * 100;
+  const normUb = norm.ci.upper * 100;
+  console.log(`normalized non-inferiority    : CI lower ${normLb.toFixed(1)}pp ${normLb > -MARGIN_PP ? '>' : '≤'} −${MARGIN_PP}pp  →  ${normLb > -MARGIN_PP ? 'MET' : 'NOT MET'}`);
+  console.log(`normalized excludes 0?        : ${normUb < 0 ? `yes (upper ${normUb.toFixed(1)}pp < 0 → still worse)` : 'no'}`);
+  process.exit(0);
+}
+
+main();
