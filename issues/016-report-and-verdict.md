@@ -8,7 +8,7 @@ pass-rate, 0.61× wall-clock). Verdict doc
 [OPENCODE-AB-TIER64-VERDICT.md](../host/test/docs/OPENCODE-AB-TIER64-VERDICT.md), renderer
 [config-ab-verdict.mjs](../host/test/scripts/config-ab-verdict.mjs) (reuses #015
 `paired_bootstrap` + `registry.js`). Every figure re-derived from the 512-row registry, not
-copied. Status sha: see git log for this ticket's feature commit. See **Result** below.
+copied. Status sha: `3129860`. See **Result** below.
 
 ## Parent
 
