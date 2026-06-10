@@ -339,17 +339,22 @@ is strictly serial: #008 → #010 → #011 (one agent per tranche).
 
 ### #011 — ✅ complete (suite finished)
 
-- Tier-32 fingerprint added to model_configs.json
-  (qwen35-9b-q5kxl-ctx64k-v7noreppen-pp01-opencode-prompt, §4 scope note
-  embedded); config.js selector + test updated; suite 144/144 green.
+- TWO tier-32 fingerprints added to model_configs.json, mirroring the
+  tier-16 pair (…-opencode-a for opencode-a/+git, …-opencode-prompt for
+  opencode-a+prompt; §4 scope notes embedded); config.js tier maps + drift-
+  guard tests updated; suite 144 pass / 0 fail (runner image).
 - :11438 green + probe 3/3 PASS (closed think block, both modes); wizard
-  smoke at slider 32 green (injection + artifact); state restored.
-- 8/8 driver cells → registry rows all hardware_tier:32, single correct
-  fingerprint, zero harness_error (1 genuine task fail on wordy — clean
-  row; no comparative claim per §4). Driver + gate rc=0.
-- Note: agent session ended mid-sweep ("standing by" for the driver);
-  orchestrator finished the watch, verified rows, stopped :11438, wrote
-  the ticket Result.
+  smoke at slider 32 green (injection + artifact); state restored
+  byte-identical.
+- 8/8 driver cells → registry rows all hardware_tier:32, all carrying the
+  -opencode-prompt fingerprint, zero harness_error (1 genuine task failure:
+  wordy rep 1 hit the 600s timeout cap — clean row, model outcome; no
+  comparative claim per §4). Driver + gate rc=0.
+- Process note: the agent's "sweep complete" notifications fired early
+  (driver still on cell 3/8); both the agent (in-session, after the real
+  exit) and the orchestrator (independently) verified rows and cleanup —
+  accounts reconcile. The agent corrected three inaccuracies in the
+  orchestrator's mid-sweep Result draft; ticket text is authoritative.
 
 ### T7 / FINAL coherence check — PASS
 
