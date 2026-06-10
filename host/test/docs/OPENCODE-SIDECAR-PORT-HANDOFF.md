@@ -1,5 +1,50 @@
 # Cheap-sidecar → OpenCode port — investigation handoff
 
+## RESULT (2026-06-10) — the prompt ports; it recovers most of the tier-16 gap
+
+Sweep: 32 tasks × N=8 × {`opencode-a+git`, `opencode-a+prompt`} at tier-16,
+appended to a copy of the #019 registry
+(`.claw-runtime/run_registry.sidecar-port-20260610.jsonl`, claw rows reused via
+`SKIP_PHASE_A`); §0a statistic throughout (paired bootstrap by `test_id`,
+B=10000, seed `0xc0ffee`, 90% CI); harness `212546f`; both gates PASS; zero
+harness errors in the new arms (claw's 17 `context_overflow` rows are the known
+#019 attrition).
+
+| comparison | aggregate Δ | 90% CI | reading |
+|---|---|---|---|
+| `opencode-a` − `claw-rig` (replication) | −7.7pp | [−13.1, −2.5] | #019 reproduced exactly in this registry |
+| `opencode-a+git` − `claw-rig` (control) | −8.1pp | [−13.9, −2.3] | git-init alone is a wash (≈ bare oc) |
+| **`opencode-a+prompt` − `opencode-a+git`** | **+6.6pp** | **[+3.1, +10.2]** | **prompt effect real — CI excludes 0** |
+| `opencode-a+prompt` − `claw-rig` (canonical) | −1.5pp | [−6.4, +3.5] | §0a.1 NOT MET by 1.4pp on the CI bound |
+| `opencode-a+prompt` − `claw-rig` (normalized: claw overflow=fail) | +0.8pp | [−3.9, +5.9] | non-inferior under the #019 sensitivity rule |
+
+Wall-clock: `+prompt` median 20.8s vs claw 24.4s (0.85×, §0a.2 MET). Iteration
+parity: both medians 8.
+
+**The §4 pre-registered expectation (`+prompt ≈ 0`, "the moat is the harness
+loop") is FALSIFIED.** Planting claw's `system-prompt.md` verbatim as a
+git-committed `AGENTS.md` recovers ~6.2pp of the −7.7pp deficit — the tier-16
+claw advantage is mostly the *discipline prompt*, not the agent loop. The
+residual vs claw is −1.5pp [−6.4, +3.5]: parity is inside the CI, but the
+pre-registered §0a.1 retire bar is missed by 1.4pp under canonical eligibility
+(and met under the normalized rule that scores claw's context-overflows as
+fails, exactly as #019 reported its own sensitivity). Formal verdict at the
+pre-registered rule: **KEEP@16 stands, narrowly**; the honest summary is
+"+prompt brings tier-16 OpenCode to statistical parity with claw, with the
+decision rule left just unresolved at N=8". A deciding follow-up (if wanted):
+re-sweep both `+prompt` and claw tier-16 at larger N to shrink the ±5pp CI, or
+pre-register the normalized rule and call it.
+
+Per-task notes: gains concentrate in discipline-shaped tasks (`ini-parser`
++37.5pp vs control, `cascading-bugs`, `eight-functions`); `lru-cache` is
++prompt's best task vs claw (+46.4pp); worst vs claw −48.2pp (`book-store`,
+which also collapsed under `+git` — 1/8 vs claw 5/8 — the one place git-init
+itself may interfere; at N=8 this is a flag, not a finding). Scope caveats
+carry over verbatim from OPENCODE-AB-FINAL-REPORT.md §6 (tier-16 = capability
+proxy on 64 GB silicon, thinking-off both arms, split provenance).
+
+---
+
 **Status: wiring COMPLETE + smoke GREEN (2026-06-09); tier-16 sweep launched.**
 Probe phase findings (§1, §2) stand. The `+prompt` arm is wired per §4's design
 default — plus an `opencode-a+git` control arm so the prompt effect is isolated
