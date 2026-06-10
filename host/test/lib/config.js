@@ -2,17 +2,23 @@
 //
 // ONE env — `CONFIG` — is the single source of truth for both halves of the
 // A/B injection:
-//   1. which runner runAgent's defaultRunner resolves to (claw vs opencode), and
+//   1. which runner runAgent's defaultRunner resolves to, and
 //   2. the coarse `config_id` bundle label stamped on every registry row.
 // Because the two ride the same value, test files stay BYTE-IDENTICAL (no
 // per-file CONFIG branching) and a row's serving bundle can never disagree with
 // the runner that produced it.
 //
-//   CONFIG unset | ''        → 'claw-rig'   (default; current behavior preserved)
-//   CONFIG=claw-rig          → 'claw-rig'
+//   CONFIG unset | ''        → 'claw-rig'   (historical default; NOT runnable — see below)
+//   CONFIG=claw-rig          → 'claw-rig'   (historical; readable, NOT runnable)
 //   CONFIG=opencode-a        → 'opencode-a'
 //   CONFIG=opencode-a+git    → 'opencode-a+git'    (sidecar-port A/B control arm)
 //   CONFIG=opencode-a+prompt → 'opencode-a+prompt' (sidecar-port A/B treatment arm)
+//
+// `claw-rig` is HISTORICAL-ONLY since #008/#010 retired the claw stack
+// (archived at git tag `claw-stack-final`). It stays in VALID_CONFIGS so the
+// preserved registries under host/test/docs/data/ keep validating and the
+// analysis scripts keep pairing against those rows — but
+// lib/runAgent.js selectRunner throws if it is selected for execution.
 //
 // The `opencode-a+git` / `opencode-a+prompt` pair is the tier-16 sidecar-port
 // experiment (OPENCODE-SIDECAR-PORT-HANDOFF.md §4): both get a git-initialized
@@ -28,13 +34,14 @@
 // 'opencode-a' / baseline 'claw-rig'), so CONFIG *is* the config_id — no second
 // mapping to keep in sync.
 //
-// This module imports nothing from claw.js / runAgent.js / opencode.js so it can
-// be a shared leaf dependency of all three without an import cycle.
+// This module imports nothing from runAgent.js / opencode.js / registry_emit.js
+// so it can be a shared leaf dependency of all of them without an import cycle.
 
-/** The accepted CONFIG / config_id values (the registry's coarse bundle enum). */
+/** The accepted CONFIG / config_id values (the registry's coarse bundle enum).
+ *  'claw-rig' is historical-only (readable rows, no runner). */
 export const VALID_CONFIGS = ['claw-rig', 'opencode-a', 'opencode-a+git', 'opencode-a+prompt'];
 
-/** Every config that routes to the OpenCode runner (vs the claw rig). */
+/** Every RUNNABLE config — all route to the OpenCode runner. */
 export const OPENCODE_CONFIGS = ['opencode-a', 'opencode-a+git', 'opencode-a+prompt'];
 
 /**
@@ -46,9 +53,12 @@ export function isOpenCodeConfig(configId) {
 }
 
 /**
- * Resolve the active `config_id` from the process env. Unset/empty defaults to
- * 'claw-rig' so pre-opencode callers are unaffected. Throws on an unrecognized
- * value — fail loud rather than silently mislabel rows or pick the wrong runner.
+ * Resolve the active `config_id` from the process env. Unset/empty resolves to
+ * 'claw-rig' (the historical default — kept so registry-reading code paths and
+ * pre-#010 sidecars keep their meaning; selecting it for EXECUTION throws in
+ * selectRunner, so an unset CONFIG fails loud at run time rather than running
+ * the wrong arm). Throws on an unrecognized value — fail loud rather than
+ * silently mislabel rows or pick the wrong runner.
  *
  * @param {NodeJS.ProcessEnv} [env=process.env]
  * @returns {'claw-rig'|'opencode-a'|'opencode-a+git'|'opencode-a+prompt'}

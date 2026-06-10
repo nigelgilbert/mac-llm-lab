@@ -1,22 +1,21 @@
 #!/usr/bin/env node
-// Paired-run gate for the #013 phase-swap A/B driver (run-config-ab.sh).
+// Paired-run gate for the config-vs-config sweep driver (run-config-ab.sh).
 //
-// After a paired run the driver appends BOTH phases' rows to a single registry
+// After a sweep the driver appends every arm's rows to a single registry
 // file. This script proves the two things the driver exists to guarantee, and
 // EXITS NON-ZERO if either fails — so a silently-mislabeled or silently-dropped
 // row turns the whole driver red instead of producing a hollow "green" sweep:
 //
 //   1. config_id discipline. EVERY row in the registry carries a config_id in
-//      the {claw-rig, opencode-a} enum. A row with a missing/foreign config_id
-//      is the footgun this driver was written to close: paired_bootstrap
+//      the VALID_CONFIGS enum. A row with a missing/foreign config_id
+//      is the footgun this gate was written to close: paired_bootstrap
 //      (lib/paired_bootstrap.js summarizeTasks) filters on
 //      `r.config_id === treatment | baseline` with NO default, so a row without
 //      the key is SILENTLY excluded from pairing. We refuse to let one exist.
 //
 //   2. Both sides bucket. paired_bootstrap, run over these rows, must find at
-//      least one eligible run for BOTH configs — i.e. the claw baseline is NOT
-//      dropped to zero. The DoD: "paired_bootstrap must bucket N claw-rig +
-//      N opencode-a for the test set (not 0 baseline)."
+//      least one eligible run for BOTH configs — i.e. the baseline is NOT
+//      dropped to zero.
 //
 // It deliberately reuses lib/paired_bootstrap.js (the real #015 statistic) and
 // lib/registry.js (the real reader) rather than re-deriving buckets, so this
@@ -64,7 +63,7 @@ function main() {
   const { registryPath, tier, treatment: treatmentOpt, baseline: baselineOpt } = parseArgs(process.argv);
   const rows = readRegistry({ registryPath });
 
-  console.log(`=== #013 paired-run gate ===`);
+  console.log(`=== config-ab paired-run gate ===`);
   console.log(`registry : ${registryPath}`);
   console.log(`rows     : ${rows.length}${tier != null ? `  (tier filter: ${tier})` : ''}`);
 
@@ -136,7 +135,7 @@ function main() {
     );
   }
   if (baselineEligible === 0) {
-    failures.push(`claw baseline ('${baseline}') bucketed ZERO eligible paired runs — the exact regression this gate guards against.`);
+    failures.push(`baseline ('${baseline}') bucketed ZERO eligible paired runs — the exact regression this gate guards against.`);
   }
   if (treatmentEligible === 0) {
     failures.push(`treatment ('${treatment}') bucketed ZERO eligible paired runs.`);
@@ -166,7 +165,7 @@ function main() {
 
   console.log(
     `\nPASS — every row config_id-stamped; both sides bucketed ` +
-    `(${baseline}=${baselineEligible}, ${treatment}=${treatmentEligible} eligible paired runs). Claw baseline NOT dropped.`,
+    `(${baseline}=${baselineEligible}, ${treatment}=${treatmentEligible} eligible paired runs). Baseline NOT dropped.`,
   );
   process.exit(0);
 }

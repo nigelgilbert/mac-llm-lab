@@ -9,7 +9,7 @@
 //     `passed` is derived from the test:pass / test:fail event type (never
 //     null).
 //
-// Wired in package.json + entrypoint.sh + the sweep scripts via:
+// Wired in package.json + the sweep driver's per-cell loop via:
 //   --test-reporter=./lib/registry-reporter.js --test-reporter-destination=stdout
 //
 // runAgent emits the data the reporter needs via diagnostics keyed to the
@@ -40,7 +40,7 @@
 //     --diff catches the resulting missing cells, so the tradeoff is
 //     acceptable. Don't "fix" by adding try/finally without revisiting this.
 
-import { writeAssertionResult } from './claw.js';
+import { writeAssertionResult } from './registry_emit.js';
 import { TIER_LABEL } from './tier.js';
 
 const POST_STDERR_TAIL = 800;

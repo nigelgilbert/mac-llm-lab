@@ -22,7 +22,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { runOpenCode } from '../lib/opencode.js';
-import { writeAssertionResult } from '../lib/claw.js';
+import { writeAssertionResult } from '../lib/registry_emit.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..', '..');

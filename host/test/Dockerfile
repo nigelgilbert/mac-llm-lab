@@ -1,30 +1,38 @@
-# Ephemeral Node test runner with the `claw` binary baked in.
-# Built and torn down per `run.sh` invocation; we don't want a Node toolchain
-# on the host. The claw binary is copied from the locally-built claw-code
-# image so we don't pay another cargo --release.
+# Plain Node toolchain image (`mac-llm-lab-test:local`) for the eval harness:
+#   - unit tests:    docker compose run --rm test            (CMD below)
+#   - one-off node:  docker run --rm -v $PWD:$PWD -w $PWD/host/test \
+#                      --entrypoint node mac-llm-lab-test:local scripts/<x>.mjs ...
+#     (this is the docs/data/README.md re-derivation incantation — keep it working)
+#
+# The claw binary this image used to COPY from claw-code:local is gone with the
+# claw stack (#008/#010; archived at tag `claw-stack-final`) — nothing here
+# depends on that image anymore. Agent cells run in the SIBLING opencode
+# container via the baked eval-runner image (Dockerfile.runner), never here:
+# this image has no docker CLI by design.
 #
 # Zero npm dependencies — tests run on Node's built-in test runner (`node --test`)
-# against ESM sources, so there's no `npm install` layer to bust.
+# against ESM sources, so there's no `npm install` layer to bust. lib/ and
+# __tests__/ are baked for standalone use, but the canonical sweep path
+# (run-config-ab.sh) always path-matches the live working tree instead.
 
 FROM node:24-bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
-        libssl3 \
     && rm -rf /var/lib/apt/lists/*
-
-# Reuse the binary the lab already builds for the agent client.
-COPY --from=claw-code:local /usr/local/bin/claw /usr/local/bin/claw
 
 WORKDIR /test
 
 COPY package.json  ./
 COPY lib           ./lib
+COPY scripts       ./scripts
 COPY __tests__     ./__tests__
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 
 RUN mkdir -p /workspace
 
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["node", "--test", "--test-concurrency=1", "--test-reporter=spec"]
+# Default: the unit-test suite only (__tests__/lib + __tests__/scripts).
+# tier-eval cells need a live OpenCode server + docker sibling and are driven
+# by run-config-ab.sh, not by this image's CMD. (sh -c for the globs — node 24
+# does not expand directory/glob positional args itself.)
+CMD ["sh", "-c", "node --test --test-concurrency=1 --test-reporter=spec __tests__/lib/*.test.js __tests__/scripts/*.test.js"]

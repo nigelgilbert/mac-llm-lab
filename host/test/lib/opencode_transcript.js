@@ -1,6 +1,7 @@
 // OpenCode transcript adapter (issue #021) — normalize an OpenCode session log
-// into the EXISTING per-iteration schema (lib/claw.js `iterations.jsonl`, schema
-// v1) so iteration/token counts become cross-config comparable with claw.
+// into the EXISTING per-iteration schema (`iterations.jsonl` schema v1, defined
+// by the retired claw runner — archived at tag `claw-stack-final`) so
+// iteration/token counts stay cross-config comparable with the historical rows.
 //
 // SOURCE OF TRUTH: the on-disk SQLite DB, NOT the `--format json` stdout stream.
 // Two findings from #020 (client/opencode/docs/SESSION-LOG-FORMAT.md) drive this:
@@ -32,11 +33,10 @@
 // analog) and never hang.
 //
 // The small pure helpers (sha256OfStable, makeArgSummary, classifyError,
-// extractErrorSignature, stringifySorted, numOrNull) are duplicated from
-// lib/claw.js — the canonical schema-v1 writer — deliberately, to avoid importing
-// claw.js's heavy module graph (workspace/run_row/test_manifest/config) into the
-// runner's hot path. Keep them in sync with claw.js if the hashing/summary
-// conventions there change.
+// extractErrorSignature, stringifySorted, numOrNull) were duplicated from the
+// retired claw runner — the original schema-v1 writer — deliberately, to avoid
+// importing its heavy module graph (workspace/run_row/test_manifest/config)
+// into the runner's hot path. This module is now their canonical home.
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -68,7 +68,7 @@ export const OPENCODE_WORKSPACE_CHANGED_BY_TOOL = {
   task: null,        // spawns a sub-agent that may mutate via its OWN tools → unknown here
 };
 
-// Copied from lib/claw.js — keep in sync.
+// Schema-v1 error-class conventions (carried over from the retired claw runner).
 const ERROR_CLASS_PATTERNS = [
   [/(?:^|\W)Error: Cannot find module|MODULE_NOT_FOUND/i, 'module_not_found'],
   [/SyntaxError\b/, 'syntax_error'],
@@ -612,7 +612,7 @@ export function buildOpenCodeArtifacts({
 }
 
 // ---------------------------------------------------------------------------
-// Shared pure helpers (analog of claw.js).
+// Shared pure helpers (schema-v1 conventions).
 // ---------------------------------------------------------------------------
 
 export function computeWorkspaceChanged(toolName, isError) {

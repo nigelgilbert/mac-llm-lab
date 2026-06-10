@@ -1,18 +1,7 @@
-// Derive tier label and bridge routes for the tier eval suite.
-// Mirrors lib/model.js — both phases of model-ab use the same claw-llama route;
-// all three tiers here do too (grammar-constrained llama-server for all).
+// Tier label for the tier-eval suite. TIER is set per-sweep by the driver
+// (run-config-ab.sh) and rides into the reporter's per-test header via
+// TIER_LABEL. The bridge/model routing this module used to carry was part of
+// the retired claw stack (#008/#010; archived at tag `claw-stack-final`).
 
 export const TIER       = process.env.TIER ?? '64';
 export const TIER_LABEL = `tier-${TIER}`;
-
-export const bridgeModel = 'claw-llama';
-// The iter-distribution sweep flips between v1-prod and v3-deterministic
-// samplers by routing claw through different LiteLLM aliases (each pinning
-// a different temperature via extra_body). Honour CLAW_MODEL_OVERRIDE so
-// individual sweep runs can pick a route without touching test files.
-export const clawModel   = process.env.CLAW_MODEL_OVERRIDE || 'anthropic/claw-llama';
-
-// All tiers run through the same claw.gbnf grammar — expect near-1.0.
-// A dip below this threshold signals grammar incompatibility with the model's
-// native tool-call format (malformed JSON inside the wrapper).
-export const wrapRateThreshold = 0.9;

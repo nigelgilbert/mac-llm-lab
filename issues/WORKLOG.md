@@ -307,3 +307,32 @@ is strictly serial: #008 → #010 → #011 (one agent per tranche).
 ## T6 — started 2026-06-10
 
 - #010 harness-opencode-native (launched)
+
+### #010 — ✅ complete (harness opencode-native)
+
+- Deleted claw execution half (31 files): lib/{claw,bridge,backend,model}.js,
+  claw-bridge test suites + probes, 4 claw-era drivers, run-tier-eval.sh
+  (job replaced by TIER=<t> run-config-ab.sh), entrypoint.sh. Emit path
+  preserved verbatim in new lib/registry_emit.js.
+- Driver generalized: ARMS="<ids>" BASELINE=<id> TIER=64|16|32 (resident
+  :11436 never touched; on-demand start-iff-absent/stop-iff-started);
+  REUSE_ROWS=1+REGISTRY_OUT append mode replaces SKIP_PHASE_A; gate per
+  non-baseline arm with explicit --treatment/--baseline. PHASE_SWAP +
+  bridge preflights + claw-restore trap deleted (nothing left to restore).
+- Demo sweep: tier-16, opencode-a+prompt vs opencode-a+git, correct
+  per-arm seeding + fingerprints, gate PASS, exit 0, :11437 cleaned up.
+- Registries: tier-64 RETIRE +3.1pp [0.8,6.3] 0.61× and sidecar −1.5pp
+  [−6.4,3.5] 0.85× re-derived verbatim in the rebuilt claw-free image;
+  claw-rig rows readable, +2 tests pin not-runnable throw. Suite 143/143.
+- **Handoff to #011:** tier-32 port/config plumbing wired, but a tier-32
+  fingerprint must be added to modelConfigIdFor/model_configs.json or the
+  emit path refuses rows.
+
+### T6 coherence check — PASS
+
+- grep runClaw|claw.js over lib+scripts: 0. Only :11436 listening.
+  Schema/verdict continuity proven against committed registries.
+
+## T7 — started 2026-06-10 (final issue)
+
+- #011 tier32-functional-smoke (launched)

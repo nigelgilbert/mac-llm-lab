@@ -114,9 +114,16 @@ describe('modelConfigIdFor — per-tier Config-B fingerprint', () => {
 });
 
 describe('selectRunner — CONFIG routes the default runner', () => {
-  it('default (no CONFIG) returns a runner without needing HOST_WORKSPACE', () => {
-    const run = selectRunner({});
-    assert.equal(typeof run, 'function');
+  // Since #010 (claw stack retired, tag claw-stack-final) the historical
+  // claw-rig config resolves for registry reading but has NO runner: selecting
+  // it — explicitly or via an unset CONFIG — must fail loud, not run the wrong
+  // arm or silently mislabel rows.
+  it('default (no CONFIG) throws: claw-rig is historical, not runnable', () => {
+    assert.throws(() => selectRunner({}), /claw-stack-final|no runner/);
+  });
+
+  it('explicit CONFIG=claw-rig throws the same way', () => {
+    assert.throws(() => selectRunner({ CONFIG: 'claw-rig' }), /claw-stack-final|no runner/);
   });
 
   it('opencode-a WITHOUT HOST_WORKSPACE throws (the mount contract is mandatory)', () => {
@@ -140,8 +147,8 @@ describe('selectRunner — CONFIG routes the default runner', () => {
   });
 
   // The HOST_WORKSPACE demand above is the deterministic, daemon-free proof that
-  // CONFIG=opencode-a takes the opencode branch: the claw branch never inspects
-  // HOST_WORKSPACE, so a throw keyed on it can only come from the opencode path.
-  // The real end-to-end invocation of runOpenCode (and the cross-container
-  // /workspace round-trip) is proven live by scripts/opencode-workspace-roundtrip.mjs.
+  // CONFIG=opencode-a takes the opencode branch (the historical claw-rig path
+  // throws before ever inspecting HOST_WORKSPACE). The real end-to-end
+  // invocation of runOpenCode (and the cross-container /workspace round-trip)
+  // is proven live by scripts/opencode-workspace-roundtrip.mjs.
 });

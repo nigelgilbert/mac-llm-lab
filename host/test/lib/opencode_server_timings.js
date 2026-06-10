@@ -1,7 +1,7 @@
 // Issue #022 — server prompt/decode `timings` capture for Config B (OpenCode).
 //
-// Config A (claw) recovers the llama.cpp prompt/decode split via the LiteLLM
-// `_bridge.jsonl` time-window join (see lib/claw.js `sliceBridgeLog`). Config B
+// Config A (the retired claw stack) recovered the llama.cpp prompt/decode split
+// via the LiteLLM `_bridge.jsonl` time-window join. Config B
 // bypasses LiteLLM, so that path is gone — BUT it is the *same llama.cpp engine*
 // and emits the same `timings.prompt_ms` / `timings.predicted_ms`. This module
 // recovers them so the split renders on BOTH sides, into the SAME iteration-record

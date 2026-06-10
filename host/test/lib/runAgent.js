@@ -18,9 +18,9 @@
 //
 // Pass oracle (issue #001): runAgent decides pass ONCE, centrally — the
 // `/workspace` post-script exiting 0 (`post.status === 0`), config-agnostic so
-// it means the same thing under claw or OpenCode. The agent exit code is NOT a
-// pass gate (a claw-ism that would false-fail an OpenCode run which fixed the
-// workspace but returned a noisy code); it survives only as telemetry plus a
+// it means the same thing under any runner arm. The agent exit code is NOT a
+// pass gate (it would false-fail a run which fixed the workspace but returned
+// a noisy code); it survives only as telemetry plus a
 // `crashed_before_finishing` diagnostic. Test bodies therefore no longer assert
 // `agent.code`/`post.status`; they keep just their per-test invariants. See
 // host/test/docs/OPENCODE-HARNESS-AB-PLAN.md §0b.
@@ -29,11 +29,6 @@
 // instance fields — destructuring (`{ diagnostic } = t`) loses the `this`
 // binding and throws on call. Cleaner to take `t` and let runAgent invoke
 // `t.diagnostic(…)` and read `t.signal` inline.
-//
-// Frontier tests under __tests__/tier-eval/frontier/ deliberately opt out of
-// this helper and call runClaw + writeAssertionResult directly. Don't migrate
-// them blindly; expected-attempts.mjs treats both entry points as
-// emit-eligible by design.
 //
 // Concurrency assumption: serial execution within the test process. Two
 // things would race if violated: workspace.reset() wipes /workspace globally,
@@ -53,10 +48,8 @@ import path from 'node:path';
 
 import { fileURLToPath } from 'node:url';
 
-import { runClaw } from './claw.js';
 import { runOpenCode } from './opencode.js';
 import * as workspace from './workspace.js';
-import { clawModel } from './tier.js';
 import { resolveConfigId, isOpenCodeConfig } from './config.js';
 
 const DEFAULT_POST_SCRIPT_TIMEOUT_MS  = 5_000;
@@ -64,7 +57,7 @@ const DEFAULT_PRECONDITION_TIMEOUT_MS = 5_000;
 const AGENT_STDERR_TAIL = 1_500;
 const POST_STDERR_TAIL  = 800;
 
-// Buffer between claw's internal timer expiring and node:test's outer
+// Buffer between the runner's internal timer expiring and node:test's outer
 // {timeout} firing. Covers diagnostic flush (workspace.list + JSON.stringify),
 // reporter event propagation, and GC/OS jitter — i.e. everything that happens
 // after the runner returns *except* the post-script, which gets its own
@@ -109,6 +102,8 @@ const seenContexts = new WeakSet();
  * @param {number}                [opts.clawTimeoutMs]  Set equal to the test's
  *   `{timeout}`. runAgent subtracts slack (precondition + post + FLUSH_MARGIN_MS)
  *   and passes the remainder to the runner. Throws if too small for the slack.
+ *   (Name is historical — the 32-task panel sets it on every call, so it is
+ *   kept verbatim to leave the panel byte-identical.)
  * @param {string}                opts.testId
  * @param {Runner}                [opts.runner=defaultRunner]
  * @param {import('node:test').TestContext} opts.t  node:test context; runAgent
@@ -160,10 +155,10 @@ export async function runAgent({
   // reporter accidentally unwired produces zero sidecars and the diff flags
   // every cell as missing.
 
-  // run_summary.json's test_id field is populated from this env var in
-  // claw.js's buildRunSummary. Reporter doesn't read it; it's for the
+  // run_summary.json's test_id field is populated from this env var when the
+  // runner writes its run sidecar. Reporter doesn't read it; it's for the
   // downstream registry-row joiner. Captured-and-restored in the finally
-  // so a same-file caller that invokes runClaw directly after a runAgent
+  // so a same-file caller that invokes a runner directly after a runAgent
   // call doesn't inherit a stale test_id.
   const priorTestIdEnv = process.env.ITER_DIST_TEST_ID;
   process.env.ITER_DIST_TEST_ID = testId;
@@ -200,9 +195,9 @@ export async function runAgent({
     if (typeof agent.runDir === 'string' && agent.runDir.length > 0) {
       t.diagnostic(`runDir=${agent.runDir}`);
     } else {
-      // Telemetry hiccup in claw.js's collectRunArtifacts left runDir unset
-      // (best-effort by design; see lib/claw.js). Skip the diagnostic so the
-      // reporter doesn't write a sidecar under the literal path "undefined".
+      // Telemetry hiccup left runDir unset (the runner's sidecar collection is
+      // best-effort by design). Skip the diagnostic so the reporter doesn't
+      // write a sidecar under the literal path "undefined".
       // expected-attempts.mjs's diff catches the resulting missing registry row.
       console.error(`[runAgent] no runDir from runner for testId=${testId}; sidecar will not be written`);
     }
@@ -230,11 +225,11 @@ export async function runAgent({
     }
 
     // Agent exit code: telemetry, NOT a pass gate (issue #001). It already
-    // rides in the agent_result diagnostic above (→ registry `claw_exit` +
-    // `terminal_status`). A non-zero code means the agent crashed before
-    // finishing; surface it as a diagnostic, but let the workspace oracle have
-    // the final say on pass — claw exits 0 on success, but `opencode run`'s
-    // exit semantics are unconfirmed and could false-fail a correct workspace.
+    // rides in the agent_result diagnostic above (→ sidecar `claw_exit` —
+    // historical field name — + `terminal_status`). A non-zero code means the
+    // agent crashed before finishing; surface it as a diagnostic, but let the
+    // workspace oracle have the final say on pass — `opencode run`'s exit
+    // semantics are unconfirmed and could false-fail a correct workspace.
     // (null code = timeout/abort, already carried by terminal_status; not a
     // "crash".)
     if (typeof agent.code === 'number' && agent.code !== 0) {
@@ -331,33 +326,41 @@ function seedWorkspaceGit({ plantAgentsMd }) {
 // selection logic defaultRunner uses, rather than a parallel reimplementation.
 // Returns a function with the runner call shape ({prompt,signal,timeoutMs}).
 //
-// claw runs in-process (binary baked into the test image); opencode runs in a
-// SIBLING container that bind-mounts a HOST dir at /workspace. For the harness's
-// reset/seed/post-script (which operate on the container path workspace.WORKSPACE
-// = '/workspace') and the agent's writes to land in the SAME place, the sibling
-// must mount the host dir that backs THIS container's /workspace. That host path
-// is supplied out-of-band by the #013 driver as HOST_WORKSPACE; without it the
-// sibling would mount a different dir and the oracle would never see the agent's
-// writes, so we fail loud rather than silently false-fail every cell. See
+// opencode runs in a SIBLING container that bind-mounts a HOST dir at
+// /workspace. For the harness's reset/seed/post-script (which operate on the
+// container path workspace.WORKSPACE = '/workspace') and the agent's writes to
+// land in the SAME place, the sibling must mount the host dir that backs THIS
+// container's /workspace. That host path is supplied out-of-band by the
+// run-config-ab.sh driver as HOST_WORKSPACE; without it the sibling would mount
+// a different dir and the oracle would never see the agent's writes, so we fail
+// loud rather than silently false-fail every cell. See
 // host/test/docs/OPENCODE-WORKSPACE-CONTRACT.md.
+//
+// `claw-rig` (and an unset CONFIG, which resolves to it) is HISTORICAL-ONLY
+// since the claw stack was retired (#008/#010; archived at tag
+// `claw-stack-final`): its rows in the preserved registries stay valid and
+// readable, but there is no runner behind it anymore — selecting it throws.
 export function selectRunner(env = process.env) {
   const configId = resolveConfigId(env);
-  if (isOpenCodeConfig(configId)) {
-    const workspaceDir = env.HOST_WORKSPACE;
-    if (!workspaceDir) {
-      throw new Error(
-        `CONFIG=${configId} requires HOST_WORKSPACE — the host path backing the ` +
-        "test container's /workspace bind mount (set by the #013 driver). Without " +
-        'it the opencode sibling container would mount a different host dir and the ' +
-        'workspace oracle would never see the agent\'s writes. See ' +
-        'host/test/docs/OPENCODE-WORKSPACE-CONTRACT.md.',
-      );
-    }
-    return ({ prompt, signal, timeoutMs }) =>
-      runOpenCode({ prompt, signal, timeoutMs, workspaceDir });
+  if (!isOpenCodeConfig(configId)) {
+    throw new Error(
+      `CONFIG=${configId} is a historical config_id with no runner: the claw ` +
+      'stack was retired (issues #008/#010; archived at git tag claw-stack-final). ' +
+      'Set CONFIG to a runnable opencode arm (see OPENCODE_CONFIGS in lib/config.js).',
+    );
+  }
+  const workspaceDir = env.HOST_WORKSPACE;
+  if (!workspaceDir) {
+    throw new Error(
+      `CONFIG=${configId} requires HOST_WORKSPACE — the host path backing the ` +
+      "test container's /workspace bind mount (set by the run-config-ab.sh driver). " +
+      'Without it the opencode sibling container would mount a different host dir ' +
+      'and the workspace oracle would never see the agent\'s writes. See ' +
+      'host/test/docs/OPENCODE-WORKSPACE-CONTRACT.md.',
+    );
   }
   return ({ prompt, signal, timeoutMs }) =>
-    runClaw({ prompt, model: clawModel, signal, timeoutMs });
+    runOpenCode({ prompt, signal, timeoutMs, workspaceDir });
 }
 
 // Re-resolves on every invocation so the selector reads the env live (tests

@@ -1,6 +1,6 @@
-// Drive the OpenCode container (Config B) one-shot and capture an outcome-only
-// RunnerResult — the B-side analog of lib/claw.js's runClaw. It is a drop-in
-// `runner` for runAgent (lib/runAgent.js): same `{ prompt, signal, timeoutMs }`
+// Drive the OpenCode container one-shot and capture an outcome-only
+// RunnerResult — THE runner since the claw stack's retirement (#008/#010). It is
+// the `runner` for runAgent (lib/runAgent.js): the `{ prompt, signal, timeoutMs }`
 // call shape, same `{ code, stdout, stderr, elapsedMs, runDir, terminal_status }`
 // return shape, same combined-signal + **timeout-resolves-not-rejects** pattern.
 // Wiring it as the default runner via a CONFIG selector is #011; here it is
@@ -193,8 +193,8 @@ export function runOpenCode({
       ? openServerLogCursor(defaultServerLogPath(process.env.TIER ?? '64'))
       : null;
 
-    // Combine the caller's signal with our own hard ceiling. Mirrors runClaw:
-    // the internal timer must be able to fire independently, because the #009
+    // Combine the caller's signal with our own hard ceiling: the internal
+    // timer must be able to fire independently, because the #009
     // silent hangs emit no exit code — without our own ceiling a hung run never
     // settles. AbortSignal.any so either source trips the same abort path.
     const inputs = [];
@@ -215,8 +215,12 @@ export function runOpenCode({
     // NB: we deliberately do NOT pass `signal` to spawn. Killing the attached
     // `docker compose run` CLI does not reap the run container; we reap it
     // explicitly via `docker rm -f` in onAbort below, after which the CLI exits.
+    // The `exec` seam has no compose file behind it, so it must not derive a
+    // cwd from one — the default compose dir does not exist in the baked test
+    // image (no repo mount) and a missing cwd ENOENTs the spawn.
     const child = spawn(file, args, {
-      cwd: path.dirname(Array.isArray(composeFile) ? composeFile[0] : composeFile),
+      cwd: exec ? process.cwd()
+                : path.dirname(Array.isArray(composeFile) ? composeFile[0] : composeFile),
       env: { ...process.env, WORKSPACE: workspaceDir, OPENCODE_RUN_ID: runId },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -345,7 +349,7 @@ export function runOpenCode({
  * Write the per-run sidecar (run_summary.json + empty iterations.jsonl) and
  * return its directory. Outcome-only: enough for lib/run_row.js + the registry
  * reporter to assemble a row (run_id, test_id, timestamps, terminal_status,
- * exit_code, iters_count=0). Best-effort, mirroring claw.js — never throws; on a
+ * exit_code, iters_count=0). Best-effort — never throws; on a
  * write hiccup the path is still returned and runAgent's runDir guard / the
  * expected-attempts diff catch the missing sidecar.
  */
@@ -365,7 +369,7 @@ function writeSidecar({ runtimeRoot, runId, runStartedMs, runFinishedMs, code, t
       schema_version: SCHEMA_VERSION,
       run_id: runId,
       // Set by runAgent for the duration of the runner call (process-wide env);
-      // null on a standalone invocation. Mirrors claw.js's buildRunSummary.
+      // null on a standalone invocation (schema-v1 run_summary convention).
       test_id: process.env.ITER_DIST_TEST_ID ?? null,
       git_sha: process.env.GIT_SHA ?? null,
       hardware_instance: process.env.HARDWARE_INSTANCE ?? 'M5',

@@ -40,11 +40,12 @@ describe('isEmitEligible', () => {
     assert.equal(isEmitEligible(p), true);
   });
 
-  it('matches a writeAssertionResult call (frontier opt-out path)', () => {
+  it('matches a writeAssertionResult call (direct-runner opt-out path)', () => {
     const p = writeFixture('b.test.js', `
-      import { runClaw, writeAssertionResult } from '../../lib/claw.js';
+      import { runOpenCode } from '../../lib/opencode.js';
+      import { writeAssertionResult } from '../../lib/registry_emit.js';
       it('z', async ({ signal }) => {
-        const r = await runClaw({ prompt: 'p', signal, timeoutMs: 60_000 });
+        const r = await runOpenCode({ prompt: 'p', signal, timeoutMs: 60_000 });
         writeAssertionResult(r.runDir, { passed: true });
       });
     `);

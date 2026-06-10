@@ -2,6 +2,10 @@
 # Utility: run a specific test file (or pattern) inside the test container.
 # Resolves __tests__/**/<pattern>.test.js on the host, then hands the matches
 # to `node --test` in the docker compose `test` service.
+#
+# Intended for the UNIT suites (__tests__/lib, __tests__/scripts). tier-eval
+# agent cells need a live OpenCode server + the docker-sibling mount contract —
+# run those through run-config-ab.sh, not here.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -29,22 +33,11 @@ fi
 echo "running ${#matches[@]} test file(s):" >&2
 printf '  %s\n' "${matches[@]}" >&2
 
-# Mount the whole __tests__ tree (not just __tests__/lib) so the matched
-# files we found on the host are the ones executed in the container —
-# otherwise a newly-added or edited test on the host would either silently
-# run a stale copy from the image or fail to resolve.
-#
-# Pass `node ...` as the service command (rather than --entrypoint node) so
-# entrypoint.sh's /root/.claw/settings.json alias-table setup still runs
-# before our node invocation — without it, this helper would exercise a
-# different claw configuration than `npm test`/the sweep runners.
-# Supply the LiteLLM master key the same way the canonical sweep runners do
-# (run-tier-eval.sh): without --env-file, ${LITELLM_MASTER_KEY} in
-# docker-compose.yml resolves empty and claw exits in ~4ms on
-# missing_credentials — so single-test runs would silently never reach the model.
-ENV_FILE="../litellm/.env"
-[[ -f "$ENV_FILE" ]] || { echo "missing $ENV_FILE (LiteLLM master key); bring up host/litellm first" >&2; exit 1; }
-docker compose --env-file "$ENV_FILE" run --rm \
+# Mount the live sources (not just the matched dir) so the files we found on
+# the host are the ones executed in the container — otherwise a newly-added or
+# edited test on the host would either silently run a stale copy from the image
+# or fail to resolve.
+docker compose run --rm \
   -v "$PWD/__tests__:/test/__tests__" \
   -v "$PWD/lib:/test/lib" \
   -v "$PWD/scripts:/test/scripts" \

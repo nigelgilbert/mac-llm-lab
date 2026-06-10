@@ -5,8 +5,10 @@
 // each tier-eval test file.
 //
 // Inputs:
-//   - clawResult: the object returned by runClaw() in lib/claw.js (has runId,
-//     runDir, iterationsPath, runSummaryPath, code, elapsedMs, etc).
+//   - clawResult: a RunnerResult-shaped object as returned by a runner (today
+//     lib/opencode.js runOpenCode; historically the retired claw runner —
+//     hence the parameter name): runId, runDir, iterationsPath,
+//     runSummaryPath, code, elapsedMs, etc.
 //   - ctx: caller-supplied registry context — at minimum:
 //       run_kind, hardware_tier, memory_gb, model_config_id,
 //       test_id, test_version, oracle_type, harness_version
@@ -196,7 +198,7 @@ function pickPassed(assertion, summary, terminal_status) {
 }
 
 // Sprint 1.20: per-run upstream-failure detector. Reads the bridge slice
-// (claw.js:collectRunArtifacts copies the time-windowed _bridge.jsonl segment
+// (the retired claw runner copied the time-windowed _bridge.jsonl segment
 // into <runDir>/bridge.iterations.jsonl) and types the failure from LiteLLM's
 // callback metadata captured by host/litellm/callbacks/iter_distribution_logger.py.
 //
