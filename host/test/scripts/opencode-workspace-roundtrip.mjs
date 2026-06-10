@@ -112,6 +112,9 @@ main().catch((e) => { console.error('round-trip crashed:', e); process.exit(2); 
 //     -v /var/run/docker.sock:/var/run/docker.sock \
 //     -v "$H:/workspace" \
 //     -e CONFIG=opencode-a -e HOST_WORKSPACE="$H" -e TIER=64 \
-//     --entrypoint sh docker:cli -c \
-//     'apk add --no-cache nodejs docker-cli-compose >/dev/null && node scripts/opencode-workspace-roundtrip.mjs'
+//     --entrypoint sh mac-llm-lab-eval-runner:local -c \
+//     'node scripts/opencode-workspace-roundtrip.mjs'
+//   # (the baked #009 runner has node/git/docker/compose preinstalled;
+//   #  build: cd host/test && docker compose build runner. Pre-#009 this used
+//   #  stock docker:cli + `apk add --no-cache nodejs docker-cli-compose`.)
 // ---------------------------------------------------------------------------

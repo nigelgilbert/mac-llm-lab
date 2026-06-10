@@ -280,8 +280,8 @@ export async function runAgent({
 // claw's tool-discipline system prompt, planted VERBATIM as AGENTS.md for the
 // `opencode-a+prompt` arm (an adapted prompt would be a different, non-comparable
 // treatment — handoff §6.4). Resolved relative to this file so it works in both
-// the baked test image and the path-matched docker:cli sibling (the repo is
-// mounted at its own absolute path there).
+// the baked test image and the path-matched eval-runner sibling (#009; the repo
+// is mounted at its own absolute path there).
 const SYSTEM_PROMPT_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '../../llama-server/docs/system-prompt.md',
@@ -319,7 +319,8 @@ function seedWorkspaceGit({ plantAgentsMd }) {
         `(status=${r.status}${r.error ? `, error=${r.error.message}` : ''}): ` +
         `${(r.stderr || '').slice(0, 400)} — the ${plantAgentsMd ? 'opencode-a+prompt' : 'opencode-a+git'} ` +
         'arm REQUIRES a git-rooted workspace (OpenCode rules discovery no-ops without it); ' +
-        'in the Phase B docker:cli sibling, `git` must be in the apk add list (run-config-ab.sh).',
+        'in the Phase B runner sibling, `git` must be baked into the eval-runner image ' +
+        '(host/test/Dockerfile.runner, #009 — rebuild: cd host/test && docker compose build runner).',
       );
     }
   }

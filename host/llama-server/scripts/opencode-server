@@ -1,9 +1,23 @@
 #!/usr/bin/env bash
 # ============================================================================
 # opencode-server — start/stop/health for the OpenCode-dedicated llama-server
-# (Config B of the OpenCode A/B plan). TIER-PARAMETERIZED:
-#   OPENCODE_TIER=64  (default) — tier-64 Qwen3.6-35B-A3B, :11436, #005
-#   OPENCODE_TIER=16            — tier-16 Qwen3.5-9B,      :11437, #018
+# (Config B of the OpenCode A/B plan; post-migration-decision: the production
+# OpenCode serving layer). TIER-PARAMETERIZED:
+#   OPENCODE_TIER=64  (default) — tier-64 Qwen3.6-35B-A3B,    :11436, #005
+#   OPENCODE_TIER=16            — tier-16 Qwen3.5-9B IQ4_XS,  :11437, #018
+#   OPENCODE_TIER=32            — tier-32 Qwen3.5-9B Q5_K_XL, :11438, on-demand only
+#
+# ROLES (migration decision §2.5 / issue #002):
+#   tier-64 — RESIDENT. The login-persistent daily serving daemon under
+#     launchd (`opencode-server install`), playing the role claw's :11435
+#     plays today. MEMORY BUDGET: the 35B-A3B GGUF is ~21 GB resident; until
+#     #008 guts the claw stack it co-resides with claw's identical-weights
+#     server on :11435 (~21 GB more), i.e. ~42 GB of weights + KV on the
+#     64 GB box. This is the accepted interim cost of build→prove→gut; #008
+#     reclaims it.
+#   tier-16 / tier-32 — ON-DEMAND. Boot via `OPENCODE_TIER=N opencode-server
+#     start`, stop after use. (tier-32 is the same 9B at Q5_K_XL — adopted by
+#     extrapolation, decision §2.7; no plist, on-demand only.)
 #
 # Serves the SAME per-tier GGUF as the production claw server, but with
 # OpenCode's serving config:
@@ -28,8 +42,12 @@
 #   ./scripts/opencode-server health     # exit 0 iff /health is green
 #   ./scripts/opencode-server probe      # /apply-template: assert the #004 fix
 #                                        #   + closed <think></think> prefill
-#   ./scripts/opencode-server install    # OPTIONAL: render+bootstrap a launchd
-#   ./scripts/opencode-server uninstall  #   plist for login-persistent serving
+#   ./scripts/opencode-server install    # render+bootstrap the launchd plist for
+#                                        #   login-persistent serving, then wait
+#                                        #   for green /health (tier-64: the
+#                                        #   resident daily daemon; tier-16 also
+#                                        #   has a plist; tier-32 is on-demand only)
+#   ./scripts/opencode-server uninstall  # bootout + remove the rendered plist
 #
 # The boot incantation mirrors the known-good non-grammar boot in
 # templates/verify-template.sh (same build, 5594d13).
@@ -47,7 +65,11 @@ TIER="${OPENCODE_TIER:-64}"
 case "$TIER" in
   64) DEF_PORT=11436; DEF_ALIAS=opencode;    DEF_TEMPLATE=qwen36-corrected.jinja; TAG="" ;;
   16) DEF_PORT=11437; DEF_ALIAS=opencode-16; DEF_TEMPLATE=qwen35-corrected.jinja; TAG="-16" ;;
-  *)  echo "ERROR: unsupported OPENCODE_TIER=$TIER (use 16 or 64)" >&2; exit 1 ;;
+  # tier-32: same Qwen3.5-9B family as tier-16 (Q5_K_XL quant) -> same corrected
+  # template; own port/alias/log so it never collides with the other servers.
+  # On-demand only (start/stop) — no launchd plist by design (decision §2.5).
+  32) DEF_PORT=11438; DEF_ALIAS=opencode-32; DEF_TEMPLATE=qwen35-corrected.jinja; TAG="-32" ;;
+  *)  echo "ERROR: unsupported OPENCODE_TIER=$TIER (use 16, 32 or 64)" >&2; exit 1 ;;
 esac
 
 PORT="${OPENCODE_LLAMA_PORT:-$DEF_PORT}"   # own port; avoids claw :11435, LiteLLM :4000, other tier
@@ -110,6 +132,30 @@ running_pid() {
   return 1
 }
 
+# launchd state of this tier's agent: prints "loaded (pid N)" / "loaded" and
+# returns 0 if the label is bootstrapped into the gui domain, else returns 1.
+launchd_state() {
+  local out pid
+  out="$(launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null)" || return 1
+  pid="$(awk '/^[[:space:]]*pid = /{print $3; exit}' <<<"$out")"
+  if [[ -n "$pid" ]]; then echo "loaded (pid $pid)"; else echo "loaded"; fi
+}
+
+# Poll /health for up to HEALTH_TIMEOUT seconds. $1 (optional) = a pid to
+# liveness-check each second (direct-boot path); the launchd path passes none
+# (launchd owns the process and respawns it). Returns 0 on green.
+wait_green() {
+  local pid="${1:-}"
+  for _ in $(seq 1 "$HEALTH_TIMEOUT"); do
+    if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+      echo "process died during startup; log tail:" >&2; tail -20 "$LOG" >&2; return 2
+    fi
+    is_green && return 0
+    sleep 1
+  done
+  return 1
+}
+
 # The non-grammar boot incantation — same shape as verify-template.sh boot(),
 # extended with the per-tier sampler, thinking-off kwarg, and generous -n.
 cmd_start() {
@@ -152,14 +198,12 @@ cmd_start() {
   echo $! > "$PIDFILE"
   echo "  pid $(cat "$PIDFILE"), log $LOG"
 
-  for _ in $(seq 1 "$HEALTH_TIMEOUT"); do
-    if ! kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-      echo "process died during startup; log tail:" >&2; tail -20 "$LOG" >&2; rm -f "$PIDFILE"; exit 2
-    fi
-    is_green && { echo "  /health green on :$PORT"; return 0; }
-    sleep 1
-  done
-  die "server did not reach green /health within ${HEALTH_TIMEOUT}s; log tail: $(tail -5 "$LOG")"
+  local rc=0; wait_green "$(cat "$PIDFILE")" || rc=$?
+  case "$rc" in
+    0) echo "  /health green on :$PORT"; return 0 ;;
+    2) rm -f "$PIDFILE"; exit 2 ;;
+    *) die "server did not reach green /health within ${HEALTH_TIMEOUT}s; log tail: $(tail -5 "$LOG")" ;;
+  esac
 }
 
 cmd_stop() {
@@ -171,8 +215,10 @@ cmd_stop() {
 }
 
 cmd_status() {
-  if pid="$(running_pid)"; then echo "process: running (pid $pid) on :$PORT"
-  else echo "process: not running"; fi
+  if pid="$(running_pid)"; then echo "process: running (pid $pid) on :$PORT  [direct-boot]"
+  else echo "process: not running (no live pidfile)"; fi
+  if state="$(launchd_state)"; then echo "launchd: $state ($LABEL)"
+  else echo "launchd: not loaded ($LABEL)"; fi
   if is_green; then echo "health : green ($BASE/health)"
   else echo "health : unreachable ($BASE/health)"; fi
 }
@@ -215,11 +261,23 @@ cmd_probe() {
   echo "probe: all checks passed (tier-$TIER, $BASE)"
 }
 
-# --- optional launchd path (login-persistent) ------------------------------
+# --- launchd path (login-persistent; tier-64 = the resident daily daemon) ---
 cmd_install() {
   preflight
-  [[ -f "$PLIST_TEMPLATE" ]] || die "plist template missing: $PLIST_TEMPLATE"
+  [[ -f "$PLIST_TEMPLATE" ]] || die "plist template missing: $PLIST_TEMPLATE (tier-$TIER has no launchd path — use start/stop)"
+  # Hand over from a direct-boot instance of OUR OWN tier, if one is running
+  # (same identity, same port). Anything else on the port is a hard error.
+  if running_pid >/dev/null; then
+    echo "stopping direct-boot instance before launchd handover"; cmd_stop
+  fi
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+  # brief grace so the booted-out process releases the port before re-bind
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    lsof -nP -iTCP:"$PORT" 2>/dev/null | grep -q LISTEN || break; sleep 1
+  done
+  if lsof -nP -iTCP:"$PORT" 2>/dev/null | grep -q LISTEN; then
+    die "port $PORT still in use by a foreign process (refusing — never touches claw :11435)"
+  fi
   mkdir -p "$HOME/Library/LaunchAgents"
   sed \
     -e "s|__BINARY__|$BINARY|g" \
@@ -235,12 +293,19 @@ cmd_install() {
     -e "s|__PRESENCE_PENALTY__|$PRESENCE_PENALTY|g" \
     "$PLIST_TEMPLATE" > "$PLIST_DEST"
   launchctl bootstrap "gui/$(id -u)" "$PLIST_DEST"
-  echo "installed+started: $LABEL on :$PORT (model load ~10–20s)"
+  echo "bootstrapped: $LABEL on :$PORT ($PLIST_DEST)"
+  echo "  waiting for green /health (model load; tier-64 ≈ 21 GB resident — see header memory budget)"
+  if wait_green; then
+    echo "  /health green on :$PORT — launchd state: $(launchd_state || echo '?')"
+  else
+    die "launchd service loaded but /health not green within ${HEALTH_TIMEOUT}s; log tail: $(tail -5 "$LOG")"
+  fi
 }
 
 cmd_uninstall() {
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-  echo "uninstalled: $LABEL"
+  rm -f "$PLIST_DEST"
+  echo "uninstalled: $LABEL (plist removed: $PLIST_DEST)"
 }
 
 case "${1:-}" in

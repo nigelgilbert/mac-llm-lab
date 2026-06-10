@@ -2,6 +2,20 @@
 # never `up -d`. BACKEND is set per-phase by run.sh.
 
 services:
+  # Baked eval-runner image for the A/B driver's OpenCode phase (issue #009):
+  # node + git + docker CLI + compose preinstalled, replacing the per-sweep
+  # `apk add` on stock docker:cli. BUILD-ONLY service — never `run`/`up`'d via
+  # compose (run-config-ab.sh launches it with plain `docker run` so the mount
+  # contract stays explicit there). Build: `docker compose build runner`.
+  # The `build` profile keeps it out of default `up`/`run` resolution.
+  runner:
+    profiles: ["build"]
+    build:
+      context: .
+      dockerfile: Dockerfile.runner
+    image: mac-llm-lab-eval-runner:local
+    command: ["true"]
+
   test:
     build:
       context: .

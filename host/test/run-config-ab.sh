@@ -41,6 +41,19 @@
 # sibling containers reaped) and asserts claw :11435 is still green on the way
 # out — so a mid-run abort leaves the lab as it found it.
 #
+# ── Runner image (Phase B toolchain, issue #009) ────────────────────────────
+# The OpenCode phase runs in the BAKED eval-runner image (node + git + docker
+# CLI + docker compose preinstalled) instead of stock docker:cli + a per-sweep
+# `apk add`. Build it once (rebuild only when Dockerfile.runner changes):
+#
+#   cd host/test && docker compose build runner
+#   # equivalently: docker build -f host/test/Dockerfile.runner \
+#   #                 -t mac-llm-lab-eval-runner:local host/test
+#
+# Preflight fails loud with that hint if the image is missing. The image bakes
+# TOOLCHAIN ONLY — no repo sources: the live-sources contract (path-matched
+# repo mount, -w into host/test) and the /workspace bind are unchanged.
+#
 # ── Knobs (env) ─────────────────────────────────────────────────────────────
 #   SMOKE_TESTS        space-separated tier-eval test_id stems   (default: deep-equal)
 #   CONFIG_AB_REPEATS  runs per cell per phase (→ N per bucket)  (default: 1)
@@ -55,6 +68,7 @@
 #   SKIP_PHASE_A       1 = reuse REGISTRY_OUT's claw rows, run   (default: 0)
 #                      Phase B only (needs REGISTRY_OUT existing) (#019)
 #   REGISTRY_OUT       explicit shared-registry path             (default: auto-timestamped)
+#   RUNNER_IMAGE       baked Phase B runner image (#009)         (default: mac-llm-lab-eval-runner:local)
 # ============================================================================
 set -euo pipefail
 
@@ -77,7 +91,9 @@ OC_CONFIGS="${OC_CONFIGS:-opencode-a}"
 SKIP_PHASE_A="${SKIP_PHASE_A:-0}"
 
 TEST_IMAGE="${TEST_IMAGE:-mac-llm-lab-test:local}"
-DOCKER_CLI_IMAGE="${DOCKER_CLI_IMAGE:-docker:cli}"
+# Baked Phase B runner (#009): node + git + docker CLI + compose preinstalled
+# (Dockerfile.runner). Replaces stock docker:cli + apk-add-per-sweep.
+RUNNER_IMAGE="${RUNNER_IMAGE:-mac-llm-lab-eval-runner:local}"
 TEST_COMPOSE="$SCRIPT_DIR/docker-compose.yml"
 OC_COMPOSE="$REPO_DIR/client/opencode/docker-compose.yml"
 OC_SERVER="$REPO_DIR/host/llama-server/scripts/opencode-server"
@@ -146,8 +162,10 @@ command -v curl   >/dev/null 2>&1 || err "missing: curl"
 [ -x "$OC_SERVER" ]   || err "missing/non-exec opencode-server: $OC_SERVER"
 docker image inspect "$TEST_IMAGE" >/dev/null 2>&1 \
   || err "missing image $TEST_IMAGE — build it: (cd $SCRIPT_DIR && docker compose build)"
-docker image inspect "$DOCKER_CLI_IMAGE" >/dev/null 2>&1 \
-  || err "missing image $DOCKER_CLI_IMAGE — pull it: docker pull $DOCKER_CLI_IMAGE"
+# Fail loud BEFORE any server/container is touched if the baked runner image is
+# absent (fresh clone, pruned image cache): Phase B cannot run without it.
+docker image inspect "$RUNNER_IMAGE" >/dev/null 2>&1 \
+  || err "missing baked eval-runner image $RUNNER_IMAGE (issue #009) — build it: (cd $SCRIPT_DIR && docker compose build runner)  [equivalently: docker build -f $SCRIPT_DIR/Dockerfile.runner -t $RUNNER_IMAGE $SCRIPT_DIR]"
 # claw + bridge back ONLY Phase A; skip their preflight when Phase A is skipped
 # (Phase B/opencode talks straight to the oc server on :$OC_PORT, never :11435/:4000).
 if [ "$SKIP_PHASE_A" != 1 ]; then
@@ -293,17 +311,20 @@ mkdir -p "$H"
 find "$H" -mindepth 1 -exec rm -rf {} + 2>/dev/null || true
 log "[B] shared workspace H = $H"
 
-# Opencode phase runs in a path-matched docker:cli container (NOT the test image,
-# which has no docker CLI): it mounts the host socket + the repo at its own path +
-# H at /workspace, then adds node + the compose plugin and runs the LIVE test
-# sources (so lib/* is the working tree, not a baked copy). This is the proven
-# #011/#012 incantation (scripts/opencode-workspace-roundtrip.mjs footer),
-# extended to run the tier-eval suite with the registry reporter wired and
-# RUN_REGISTRY_EMIT=1 so each cell emits a config_id-stamped row. We replicate
-# entrypoint.sh's per-cell loop inline (no claw alias table needed on this side).
-# One sub-phase per OC_CONFIGS entry, all appending to the same registry; the
-# sidecar-port arms (opencode-a+git / opencode-a+prompt) git-init the workspace
-# per-cell inside runAgent.js, which is why `git` is in the apk add below.
+# Opencode phase runs in the path-matched BAKED runner image $RUNNER_IMAGE (NOT
+# the test image, which has no docker CLI): node + git + docker CLI + compose are
+# preinstalled at build time (Dockerfile.runner, #009) — no per-sweep apk add, no
+# network dependency at phase start. It mounts the host socket + the repo at its
+# own path + H at /workspace and runs the LIVE test sources (so lib/* is the
+# working tree, not a baked copy — the runner image bakes toolchain only, never
+# repo sources). This is the proven #011/#012 incantation
+# (scripts/opencode-workspace-roundtrip.mjs footer), extended to run the
+# tier-eval suite with the registry reporter wired and RUN_REGISTRY_EMIT=1 so
+# each cell emits a config_id-stamped row. We replicate entrypoint.sh's per-cell
+# loop inline (no claw alias table needed on this side). One sub-phase per
+# OC_CONFIGS entry, all appending to the same registry; the sidecar-port arms
+# (opencode-a+git / opencode-a+prompt) git-init the workspace per-cell inside
+# runAgent.js, which is why `git` is baked into the runner image.
 #
 # RUN_REGISTRY_TESTS_DIR is overridden to the path-matched tests dir (the default
 # /test/... only exists in the baked test image). RUN_REGISTRY_MODEL_CONFIG_ID is
@@ -329,10 +350,17 @@ docker run --rm \
   -e RUN_REGISTRY_TESTS_DIR="$REPO_DIR/host/test/__tests__/tier-eval" \
   -e RUN_REGISTRY_PATH="$HOST_REG" \
   -e GIT_SHA="$GIT_SHA" \
-  --entrypoint sh "$DOCKER_CLI_IMAGE" -c '
+  --entrypoint sh "$RUNNER_IMAGE" -c '
     set -u
-    apk add --no-cache nodejs docker-cli-compose coreutils git >/dev/null 2>&1 \
-      || { echo "FATAL: apk add (nodejs/docker-cli-compose/coreutils/git) failed — no network?" >&2; exit 3; }
+    # Toolchain assert (#009): everything below is BAKED into the runner image
+    # (Dockerfile.runner) — if any tool is missing, someone pointed RUNNER_IMAGE
+    # at a bare image; fail fast with the rebuild hint instead of mid-cell.
+    for tool in node git docker timeout; do
+      command -v "$tool" >/dev/null 2>&1 \
+        || { echo "FATAL: $tool missing from runner image — rebuild it: (cd host/test && docker compose build runner)" >&2; exit 3; }
+    done
+    docker compose version >/dev/null 2>&1 \
+      || { echo "FATAL: docker compose plugin missing from runner image — rebuild it: (cd host/test && docker compose build runner)" >&2; exit 3; }
     # Fail fast + loud if the shared workspace bind mount did not land — otherwise
     # every cell false-fails deep inside reset() with a cryptic ENOENT. A green
     # here means HOST_WORKSPACE crossed the container boundary (mount contract).

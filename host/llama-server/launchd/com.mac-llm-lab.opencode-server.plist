@@ -6,14 +6,21 @@
     <string>com.mac-llm-lab.opencode-server</string>
 
     <!--
-      SECOND, OpenCode-dedicated llama-server (Config B, issue #005).
+      RESIDENT tier-64 OpenCode llama-server (Config B, issue #005; promoted to
+      the login-persistent DAILY SERVING DAEMON by the OpenCode migration
+      decision §2.5 / issue #002 — the role claw's :11435 plays today).
 
-      This is the LOGIN-PERSISTENT option only. The canonical, phase-swap-friendly
-      interface is the direct-boot control script:
-          ./host/llama-server/scripts/opencode-server {start|stop|status|health|probe}
       Render + bootstrap this plist with:
-          ./host/llama-server/scripts/opencode-server install   (sed-fills placeholders)
+          ./host/llama-server/scripts/opencode-server install   (sed-fills placeholders,
+                                                                 then waits for green /health)
       Do NOT install by hand — placeholders are filled from models.conf tier-64.
+      The direct-boot script path ({start|stop|status|health|probe}) remains for
+      ad-hoc/phase-swap use; on-demand tiers 16/32 use it exclusively.
+
+      MEMORY BUDGET (issue #002): the 35B-A3B GGUF is ~21 GB resident. Until
+      #008 guts the claw stack, this co-resides with claw's identical-weights
+      server on :11435 (~21 GB more) — ~42 GB of weights + KV on the 64 GB box.
+      Accepted interim cost of build->prove->gut; #008 reclaims it.
 
       Distinct from the production claw plist (com.mac-llm-lab.llama-server):
         - own Label + own port (:11436, vs claw :11435, LiteLLM :4000)
