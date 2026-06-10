@@ -125,13 +125,11 @@ step_52_main() {
 
   # --- client-only: remote configs pointed at the LAN serving host -----------
   if [ "$(state_get TOPOLOGY 2>/dev/null)" = "client-only" ]; then
-    local ohost def
+    local ohost
     if state_has OPENCODE_HOST; then
       ohost=$(state_get OPENCODE_HOST)
     else
-      def=$(state_get BRIDGE_HOST 2>/dev/null || printf 'mac-llm-lab.local')
-      [ "$def" = "host.docker.internal" ] && def="mac-llm-lab.local"
-      ohost=$(prompt_str "OpenCode server host (LAN address of the serving Mac; IP recommended — .local often fails inside containers)" "$def")
+      ohost=$(prompt_str "OpenCode server host (LAN address of the serving Mac; IP recommended — .local often fails inside containers)" "mac-llm-lab.local")
       state_set OPENCODE_HOST "$ohost"
     fi
     state_has OPENCODE_PORT || state_set OPENCODE_PORT 11436

@@ -1,3 +1,0 @@
-#!/bin/sh
-cd "$(dirname "$0")"
-exec docker compose exec -it claw rlwrap claw --model anthropic/claw "$@"

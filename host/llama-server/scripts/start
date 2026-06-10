@@ -1,7 +1,0 @@
-#!/usr/bin/env sh
-# start — bootstrap the llama-server LaunchAgent (claw backend on :11435).
-set -eu
-PLIST="$HOME/Library/LaunchAgents/com.mac-llm-lab.llama-server.plist"
-[ -f "$PLIST" ] || { echo "missing: $PLIST (install per host/llama-server/README.md)" >&2; exit 1; }
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
-echo "started: com.mac-llm-lab.llama-server (model load takes ~10–20s)"

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# 61-opencode-smoke.sh — end-to-end smoke for the NEW coding stack (#007),
-# alongside the legacy claw/bridge smoke (60) until #008 retires it. Two
+# 61-opencode-smoke.sh — end-to-end smoke for the coding stack (#007). Two
 # assertions, both through the installed wrapper:
 #
 #   1. `oc probe` — the #001 deterministic injection oracle (wire capture:
@@ -16,7 +15,7 @@
 # client-only with no reachable LAN host: explicit SKIP with a reason
 # (rc=0) — the install is complete, only the live verification is deferred.
 #
-# Like step 60 this is a probe, not provisioning: it re-runs on every
+# This is a probe, not provisioning: it re-runs on every
 # install (its only writes are a /tmp scratch workspace, removed on pass,
 # kept on fail for debugging). It never restarts a green server — `oc`
 # itself waits for / never bootouts the resident daemon (#003 contract).

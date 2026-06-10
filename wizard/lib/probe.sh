@@ -18,14 +18,9 @@ tester_run() {
     fail "wizard-tester:local not built yet — run wizard/steps/44-build-tester.sh"
     return 1
   fi
-  local bridge_host bridge_port key
-  bridge_host=$(state_get BRIDGE_HOST 2>/dev/null || printf 'host.docker.internal')
-  bridge_port=$(state_get BRIDGE_PORT 2>/dev/null || printf '4000')
-  key=$(state_get LITELLM_MASTER_KEY 2>/dev/null || printf '')
   # NOTE: the tester image sets ENTRYPOINT ["/smoke.sh"], so pass ONLY the
   # mode as the arg — passing "/smoke.sh $mode" made smoke.sh see "/smoke.sh"
   # as its mode and fail dispatch (pre-existing bug; fixed during issue #006).
-  BRIDGE_HOST="$bridge_host" BRIDGE_PORT="$bridge_port" LITELLM_MASTER_KEY="$key" \
   docker compose -f "${TESTER_DIR}/docker-compose.yml" run --rm \
     -e MODE="$mode" \
     tester "$mode"
@@ -33,6 +28,3 @@ tester_run() {
 
 probe_docker()  { tester_run docker; }
 probe_ollama()  { tester_run ollama; }
-probe_bridge()  { tester_run bridge; }
-probe_models()  { tester_run models; }
-probe_deep()    { tester_run deep; }

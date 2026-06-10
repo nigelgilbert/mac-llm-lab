@@ -1,7 +1,0 @@
-#!/usr/bin/env sh
-# stop — bootout the llama-server LaunchAgent and free its model from memory.
-set -eu
-PLIST="$HOME/Library/LaunchAgents/com.mac-llm-lab.llama-server.plist"
-[ -f "$PLIST" ] || { echo "missing: $PLIST" >&2; exit 1; }
-launchctl bootout "gui/$(id -u)" "$PLIST" 2>&1 || true
-echo "stopped: com.mac-llm-lab.llama-server"

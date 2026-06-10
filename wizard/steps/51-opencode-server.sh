@@ -4,12 +4,12 @@
 # login-persistent launchd resident llama-server for the chosen tier, via
 #     OPENCODE_TIER=<tier> host/llama-server/scripts/opencode-server install
 # which renders the tier's plist from models.conf (corrected template,
-# thinking-off kwarg, tier sampler, NO claw.gbnf grammar) and waits for a
-# green /health. This step is the claw-server role's successor for NEW
-# installs; the claw steps (47/48/49) stay until #008 guts them.
+# thinking-off kwarg, tier sampler, native tools grammar — no GBNF) and
+# waits for a green /health. This is the production serving step (#008
+# retired the claw steps 47/48/49).
 #
 # CRITICAL: `opencode-server install` bootouts a stale label as part of its
-# direct-boot handover. Exactly like step 47, we therefore refuse to invoke
+# direct-boot handover. We therefore refuse to invoke
 # it while this tier's agent is already loaded AND healthy — strict
 # idempotency means a live resident daemon (and anything mid-flight against
 # it) is never disturbed.

@@ -279,3 +279,31 @@ no longer gated bootable.
 is strictly serial: #008 → #010 → #011 (one agent per tranche).
 
 - #008 gut-claw-stack (launched)
+
+### #008 — ✅ complete (the gut)
+
+- Annotated tag `claw-stack-final` → 8d6d93d; archive verified resolving
+  BEFORE deletion. claw launchd service bootout+plist removed; litellm
+  compose down; lab's claw-code container removed (image kept — harness
+  Dockerfile still COPYs from it; #010 will deal with it).
+- 38 tracked files deleted (client/claw-code, host/litellm, claw.gbnf,
+  5 plists, wizard steps 47/48/49/50/60, claw templates, keys.sh; step 30
+  → 30-opencode-gate.sh; +6 claw-only serving scripts, judged in-scope).
+- Wizard: install flow deps→46→51→52/53/54→61; doctor claw sections gone;
+  tester 75/75 (−17 claw tests, +no-legacy assertion).
+- Post-gut: :11436 green pid 31147 unchanged; `oc probe` PASS; `oc run`
+  POST-GUT-OK artifact via PATH symlink; full `wizard install` green.
+- Intentionally remaining for #010: all of host/test/ (claw.js, harness
+  branches, run-tier-eval.sh, Dockerfile + claw-code:local image).
+  Flagged out-of-scope leftovers: hostctl claw profile, ollama
+  claw.Modelfile, MANIFESTO/spec/research mentions.
+
+### T5 coherence check — PASS
+
+- :11435/:4000 dead; launchd lists only com.mac-llm-lab.opencode-server;
+  tag resolves; ls-files clean of prod claw paths (one historical research
+  doc remains, correctly). New stack verified post-demolition.
+
+## T6 — started 2026-06-10
+
+- #010 harness-opencode-native (launched)

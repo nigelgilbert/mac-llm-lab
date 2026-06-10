@@ -1,4 +1,19 @@
-# llama-server (claw, grammar-constrained)
+# llama-server
+
+> **RETIRED STACK NOTICE (2026-06-10, issue #008).** The claw production
+> server this README describes (grammar-constrained `:11435`, LiteLLM
+> bridge, `grammars/claw.gbnf`, `scripts/install|start|stop|status|logs`,
+> `launchd/com.mac-llm-lab.llama-server*.plist`) has been **deleted** per
+> [`OPENCODE-MIGRATION-DECISION.md`](../test/docs/OPENCODE-MIGRATION-DECISION.md);
+> the full old stack is archived at the git tag `claw-stack-final`.
+> The live serving layer in this directory is now
+> [`scripts/opencode-server`](scripts/opencode-server) (tier-parameterized,
+> launchd-resident on `:11436`, native `--jinja` tool parsing — no grammar),
+> installed by `wizard install` (step 51). `models.conf`, `templates/`, and
+> the opencode plists remain current. The body below is kept as historical
+> reference (the llama.cpp build steps in §1 are still accurate).
+
+## HISTORICAL: llama-server (claw, grammar-constrained)
 
 A native `llama.cpp` HTTP server on the lab host, dedicated to the `claw` profile, with grammar-constrained tool-call decoding. Sibling to Ollama — same Apple Silicon, same Metal backend, same GGUF on disk, just a different binary serving the one model that benefits from grammar constraints.
 

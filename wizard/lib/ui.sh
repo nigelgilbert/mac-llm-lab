@@ -2,7 +2,7 @@
 # ui.sh — ANSI helpers, banner, prompts, slider. Pure bash 3.2 safe.
 # Source-only; do not execute directly.
 
-# --- ANSI helpers (cribbed from client/claw-code/scripts/doctor) -----------
+# --- ANSI helpers ----------------------------------------------------------
 ok()    { printf "  \033[32m✓\033[0m  %s\n" "$*"; }
 warn()  { printf "  \033[33m!\033[0m  %s\n" "$*"; }
 fail()  { printf "  \033[31m✗\033[0m  %s\n" "$*"; }

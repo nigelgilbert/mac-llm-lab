@@ -17,8 +17,6 @@ source "${WIZARD_ROOT}/lib/log.sh"
 source "${WIZARD_ROOT}/lib/detect.sh"
 # shellcheck source=lib/deps.sh
 source "${WIZARD_ROOT}/lib/deps.sh"
-# shellcheck source=lib/keys.sh
-source "${WIZARD_ROOT}/lib/keys.sh"
 # shellcheck source=lib/probe.sh
 source "${WIZARD_ROOT}/lib/probe.sh"
 
@@ -34,7 +32,7 @@ wizard — install the mac-llm-lab code stack.
 
 Usage:
   wizard install            run the multi-step installer (default)
-  wizard test [MODE]        spin the tester orb. MODE = docker|ollama|bridge|models|deep (default: models)
+  wizard test [MODE]        spin the tester orb. MODE = docker|ollama (default: docker)
   wizard selftest           run the wizard test harness inside an isolated orb
   wizard doctor             read-only state inspection
   wizard --help             this message
@@ -68,31 +66,23 @@ cmd_install() {
   if [ "$(state_get TOPOLOGY)" = "full-local" ]; then
     step_45_main
     step_46_main
-    step_47_main
-    step_48_main
   fi
   # OpenCode serving (migration decision §2.5): the launchd resident
-  # llama-server for the chosen tier — the claw-server role's successor for
-  # new installs. Self-skips in client-only topology. Claw steps 47/48/49
-  # remain until #008 retires them.
+  # llama-server for the chosen tier. Self-skips in client-only topology.
   step_51_main
-  step_49_main
   # OpenCode client (#007): container image + tier configs, global prompt
   # (~/.config/opencode/AGENTS.md), `oc` wrapper on PATH. Both topologies.
   step_52_main || { fail "opencode client image/config step failed"; return 1; }
   step_53_main || { fail "global prompt install failed"; return 1; }
   step_54_main || { fail "oc wrapper install failed"; return 1; }
-  # Bring-up + smoke (60 = legacy claw/bridge smoke until #008; 61 = the
-  # opencode stack: injection wire-capture probe + a real `oc run` artifact).
-  step_50_main
-  step_60_main || true
+  # Smoke (61): injection wire-capture probe + a real `oc run` artifact.
   step_61_main || true
   hdr "Done"
   printf "  log: %s\n\n" "$(log_path)"
 }
 
 cmd_test() {
-  local mode="${1:-models}"
+  local mode="${1:-docker}"
   hdr "wizard test (--${mode})"
   if ! command -v docker >/dev/null 2>&1; then
     fail "docker not on PATH — run './wizard/wizard install' first"
@@ -131,25 +121,16 @@ cmd_doctor() {
     info "no .state yet"
   fi
 
-  hdr ".env files"
-  for f in "${REPO_ROOT}/host/litellm/.env" "${REPO_ROOT}/client/claw-code/.env"; do
-    if [ -f "$f" ]; then ok "$f"
-    else warn "missing: $f"
-    fi
-  done
-
   hdr "Container state"
   if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    for c in mac-llm-lab-litellm claw-code mac-llm-lab-openwebui; do
-      local s
-      s=$(docker inspect --format '{{.State.Status}}' "$c" 2>/dev/null | tr -d '\n')
-      [ -z "$s" ] && s="absent"
-      case "$s" in
-        running) ok  "$c — running" ;;
-        absent)  info "$c — not present" ;;
-        *)       warn "$c — $s" ;;
-      esac
-    done
+    local c=mac-llm-lab-openwebui s
+    s=$(docker inspect --format '{{.State.Status}}' "$c" 2>/dev/null | tr -d '\n')
+    [ -z "$s" ] && s="absent"
+    case "$s" in
+      running) ok  "$c — running" ;;
+      absent)  info "$c — not present" ;;
+      *)       warn "$c — $s" ;;
+    esac
   else
     warn "docker daemon not reachable"
   fi
@@ -224,17 +205,6 @@ cmd_doctor() {
     ok "tier configs present (client/opencode/opencode.json/.16/.32)"
   else
     warn "tier configs missing:${missing_cfg}"
-  fi
-
-  hdr "Bridge probe"
-  local bh bp
-  bh=$(state_get BRIDGE_HOST 2>/dev/null || printf 'host.docker.internal')
-  bp=$(state_get BRIDGE_PORT 2>/dev/null || printf '4000')
-  if curl -fsS --max-time 3 "http://${bh}:${bp}/health/liveliness" >/dev/null 2>&1 \
-    || curl -fsS --max-time 3 "http://localhost:${bp}/health/liveliness" >/dev/null 2>&1; then
-    ok "bridge reachable"
-  else
-    warn "bridge not reachable at ${bh}:${bp}"
   fi
   printf '\n'
 }
