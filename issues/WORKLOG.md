@@ -253,3 +253,29 @@ co-residence untouched (pre-#008 baseline for the gut).
 **#004 handoff (user):** use `oc` for one real piece of work in a real
 repo; capture friction list; record explicit go/no-go for #008 in the
 ticket. `oc` is on PATH; `oc help` for usage; tier-16/32 via `-t`.
+
+## #004 — ✅ GO (2026-06-10, HITL)
+
+User-driven manual acceptance; full log in
+[004-acceptance-log.md](004-acceptance-log.md). Four daily-driver exercises
+from a throwaway repo (`~/Desktop/bench/oc-toy`), tier 64 `:11436`, both paths:
+greenfield `oc run` (hello.py), TUI `is_prime`+unittest (user: "works well"),
+and the canonical bugfix loop — planted an unreachable FizzBuzz `% 15` branch;
+agent read→ran tests red→correct root cause→most-specific-first reorder→4/4
+green. Artifact: `oc-toy` commit `8d58ca8`.
+
+Friction: **zero blocker-grade** → no follow-up issues. Nits only (no `python`
+alias in container — agent self-corrected to `python3` each time; `__pycache__`
+committed in toy repo, not an oc concern). Wins: `oc status` preflight, mount
+round-trips both ways, host artifacts owned `nigel:staff`.
+
+**Decision: GO.** #008 (gut claw) is **unblocked** → then #010 (opencode-native
+harness, needs #008+#009✓) → #011 (tier-32 smoke, needs #007✓+#010). claw stack
+no longer gated bootable.
+
+## T5 — started 2026-06-10 (post-#004 GO)
+
+#004 HITL passed: GO recorded in ticket + acceptance log. Remaining graph
+is strictly serial: #008 → #010 → #011 (one agent per tranche).
+
+- #008 gut-claw-stack (launched)
