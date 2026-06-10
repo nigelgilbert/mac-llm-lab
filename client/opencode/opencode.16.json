@@ -1,5 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "autoupdate": false,
   "provider": {
     "llama-local": {
       "name": "Qwen3.5-9B IQ4_XS (llama.cpp, tier-16 Config B)",

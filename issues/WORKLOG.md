@@ -150,3 +150,33 @@ Launched in parallel (both consume the resident `:11436` daemon read-only):
 ## T3 — started 2026-06-10
 
 - #003 oc-wrapper-cli (launched)
+
+### #003 — ✅ complete
+
+- `client/opencode/bin/oc` (bash, self-locating): TUI on $PWD by default,
+  `oc run "<prompt>"` headless, `oc probe` (wire-capture injection oracle,
+  no llama-server needed), `oc status`. Tier via `-t 16|32|64`/OPENCODE_TIER.
+- Exit codes: 1 usage/no-TTY, 2 injection precondition failed, 3 server not
+  green. Prompt source: OC_PROMPT_FILE → ~/.config/opencode/AGENTS.md →
+  repo system-prompt.md; bind-mounted ro at /root/.config/opencode/AGENTS.md.
+- Server semantics: never bootout a live tier-64; tiers 16/32 on-demand,
+  stopped on exit iff oc started them (OC_KEEP_SERVER=1 to keep).
+- Verified: hello.txt via resident server (2.7 s); PTY-driven TUI wrote a
+  file to host $PWD; `oc probe` PASS; `oc -t 16` boot/run/auto-stop; 4
+  fail-loud paths exit 2 before any container starts.
+- Fix en route: TUI auto-updated to 1.17.3 inside the pinned 1.16.2
+  container → `autoupdate:false` in all three tier configs (+ new
+  opencode.32.json). #007 must install these configs as-is.
+
+### T3 coherence check — PASS (interfaces for #007 ready)
+
+- Health green, ports clean, no stray containers; changes scoped to
+  client/opencode/ + ticket.
+- #007 consumes: `oc` symlink/copy to PATH (self-locating), wizard prompt
+  install target ~/.config/opencode/AGENTS.md (oc already prefers it),
+  `oc probe` as the smoke's injection assertion, step-51 state keys from
+  #006.
+
+## T4 — started 2026-06-10
+
+- #007 wizard-opencode-client-smoke (launched)

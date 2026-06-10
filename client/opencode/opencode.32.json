@@ -3,15 +3,15 @@
   "autoupdate": false,
   "provider": {
     "llama-local": {
-      "name": "Qwen3.6-35B-A3B (llama.cpp, tier-64 Config B)",
+      "name": "Qwen3.5-9B Q5_K_XL (llama.cpp, tier-32 on-demand)",
       "npm": "@ai-sdk/openai-compatible",
       "options": {
-        "baseURL": "http://host.docker.internal:11436/v1",
+        "baseURL": "http://host.docker.internal:11438/v1",
         "apiKey": "sk-local-no-auth"
       },
       "models": {
         "opencode": {
-          "name": "Qwen3.6 35B-A3B Q4_K_XL (tier-64, alias: opencode)"
+          "name": "Qwen3.5 9B Q5_K_XL (tier-32, server alias: opencode-32)"
         }
       }
     }

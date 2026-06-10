@@ -1,0 +1,302 @@
+#!/usr/bin/env bash
+# ============================================================================
+# oc — one command from any repo to the containerized OpenCode agent (#003)
+#
+# Makes the container invisible (migration decision §2.10): asserts the
+# tier's llama-server is green (booting it if not), mounts $PWD at
+# /workspace, mounts the tier-matched opencode.json AND the global prompt
+# (AGENTS.md) into the container, then drops into the OpenCode TUI — or runs
+# a headless one-shot.
+#
+# Usage:
+#   oc                       interactive TUI on $PWD (default tier 64)
+#   oc run "<prompt>" [...]  headless one-shot ($* passed to `opencode run`)
+#   oc probe                 injection wire-capture oracle (#001): proves the
+#                            global AGENTS.md actually lands in the agent
+#                            system prompt, via an in-container mock endpoint
+#                            (deterministic; needs no llama-server)
+#   oc status                tier server health + resolved prompt/config
+#   oc help | -h | --help
+#
+# Flags (before the subcommand):
+#   -t|--tier 16|32|64       memory tier (default: $OPENCODE_TIER, else 64)
+#   --ports                  publish the compose service ports (dev server
+#                            8080). OFF by default: the claw container still
+#                            holds :8080 until the #008 gut.
+#
+# Environment:
+#   OPENCODE_TIER            same as -t (flag wins)
+#   OC_PROMPT_FILE           host path of the global prompt source. Default
+#                            resolution: ~/.config/opencode/AGENTS.md (the
+#                            wizard-installed location, decision §2.6) if it
+#                            exists, else the repo source
+#                            host/llama-server/docs/system-prompt.md.
+#   OPENCODE_CONFIG_JSON     escape hatch: override the tier-matched
+#                            opencode.json mounted into the container
+#                            (absolute path; used by probes/sweeps)
+#   OC_KEEP_SERVER=1         leave an on-demand (tier 16/32) server running
+#                            after the session instead of stopping it
+#
+# Exit codes:
+#   0   success (or `opencode`'s own exit code passed through)
+#   1   usage error / no TTY for the TUI
+#   2   PROMPT-INJECTION PRECONDITION FAILED (missing/unreadable/empty prompt
+#       file, missing tier config) — injection failure is SILENT in OpenCode
+#       (#001), so the wrapper owns this assertion and fails loud
+#   3   tier server could not be made green
+#
+# Tier serving model (decision §2.5):
+#   64  RESIDENT — launchd daemon `com.mac-llm-lab.opencode-server` (:11436).
+#       If red and the launchd job is loaded, we WAIT for green (model load
+#       takes ~minutes; never bootout a loading/healthy service). If red and
+#       not loaded, `opencode-server install` bootstraps it.
+#   16  ON-DEMAND (:11437) — direct-boot `opencode-server start`; STOPPED on
+#       exit iff oc started it (OC_KEEP_SERVER=1 to keep). A tier-16 server
+#       that was already green is left untouched.
+#   32  ON-DEMAND (:11438) — same as 16 (no launchd plist by design).
+#
+# Container-first is architectural (decision §2.4): oc never runs the
+# opencode binary on the host; everything goes through `docker compose run`
+# in client/opencode, which sandboxes the agent to the mounted workspace.
+# ============================================================================
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"              # client/opencode
+REPO_ROOT="$(cd "$COMPOSE_DIR/../.." && pwd)"            # mac-llm-lab-1
+SERVER_SCRIPT="$REPO_ROOT/host/llama-server/scripts/opencode-server"
+INVOKE_PWD="$PWD"                                        # the workspace to mount
+
+REPO_PROMPT_SOURCE="$REPO_ROOT/host/llama-server/docs/system-prompt.md"
+WIZARD_PROMPT="$HOME/.config/opencode/AGENTS.md"
+CONTAINER_PROMPT_PATH="/root/.config/opencode/AGENTS.md" # the #001 winner
+
+die()  { echo "oc: ERROR: $*" >&2; exit 1; }
+die2() { echo "oc: PROMPT PRECONDITION FAILED: $*" >&2; exit 2; }
+die3() { echo "oc: SERVER ERROR: $*" >&2; exit 3; }
+
+usage() { sed -n '/^# Usage:/,/^# ===/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'; }
+
+# --- arg parsing ------------------------------------------------------------
+TIER="${OPENCODE_TIER:-64}"
+PUBLISH_PORTS=0
+SUBCMD=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -t|--tier) [[ $# -ge 2 ]] || die "$1 needs a value (16|32|64)"; TIER="$2"; shift 2 ;;
+    --ports)   PUBLISH_PORTS=1; shift ;;
+    -h|--help|help) usage; exit 0 ;;
+    run|probe|status) SUBCMD="$1"; shift; break ;;
+    -*) die "unknown flag: $1 (see oc --help)" ;;
+    *)  die "unknown subcommand: $1 (see oc --help)" ;;
+  esac
+done
+
+case "$TIER" in
+  64) PORT=11436; TIER_CONFIG="$COMPOSE_DIR/opencode.json" ;;
+  16) PORT=11437; TIER_CONFIG="$COMPOSE_DIR/opencode.16.json" ;;
+  32) PORT=11438; TIER_CONFIG="$COMPOSE_DIR/opencode.32.json" ;;
+  *)  die "unsupported tier: $TIER (use 16, 32 or 64)" ;;
+esac
+
+# --- prompt-injection preconditions (FAIL LOUD — injection is silent) -------
+resolve_prompt() {
+  if [[ -n "${OC_PROMPT_FILE:-}" ]]; then
+    PROMPT_FILE="$OC_PROMPT_FILE"; PROMPT_ORIGIN="OC_PROMPT_FILE"
+  elif [[ -e "$WIZARD_PROMPT" ]]; then
+    PROMPT_FILE="$WIZARD_PROMPT"; PROMPT_ORIGIN="wizard install (~/.config/opencode/AGENTS.md)"
+  else
+    PROMPT_FILE="$REPO_PROMPT_SOURCE"; PROMPT_ORIGIN="repo source (host/llama-server/docs/system-prompt.md)"
+  fi
+}
+
+assert_prompt() {
+  resolve_prompt
+  [[ -e "$PROMPT_FILE" ]] || die2 "global prompt source not found: $PROMPT_FILE
+  The agent would run WITHOUT its system prompt and OpenCode would not tell you.
+  Fix: restore the file, run the wizard prompt-install step (#007), or point
+  OC_PROMPT_FILE at a readable prompt markdown file."
+  [[ -f "$PROMPT_FILE" ]] || die2 "global prompt source is not a regular file: $PROMPT_FILE
+  (a directory would bind-mount over $CONTAINER_PROMPT_PATH and inject nothing)"
+  [[ -r "$PROMPT_FILE" ]] || die2 "global prompt source not readable: $PROMPT_FILE"
+  [[ -s "$PROMPT_FILE" ]] || die2 "global prompt source is EMPTY (0 bytes): $PROMPT_FILE
+  An empty AGENTS.md mounts cleanly and silently injects nothing."
+  # absolute path for the docker -v mount
+  PROMPT_FILE="$(cd "$(dirname "$PROMPT_FILE")" && pwd)/$(basename "$PROMPT_FILE")"
+}
+
+assert_config() {
+  # If the caller pre-set OPENCODE_CONFIG_JSON we honor it (probe/sweep escape
+  # hatch) but still refuse to mount a missing file: compose would otherwise
+  # fall back to ./opencode.json and silently dial the WRONG TIER's port — the
+  # #019 sweep-bug class.
+  CONFIG_JSON="${OPENCODE_CONFIG_JSON:-$TIER_CONFIG}"
+  [[ -f "$CONFIG_JSON" && -r "$CONFIG_JSON" ]] || die2 "opencode config missing/unreadable: $CONFIG_JSON
+  Without it the container would fall back to the default tier-64 config and
+  silently dial the wrong server port."
+}
+
+# --- tier server lifecycle ---------------------------------------------------
+green() { [[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health" 2>/dev/null)" == "200" ]]; }
+
+launchd_loaded_64() { launchctl print "gui/$(id -u)/com.mac-llm-lab.opencode-server" >/dev/null 2>&1; }
+
+wait_green() { # $1 = seconds
+  local t="$1"
+  while (( t > 0 )); do green && return 0; sleep 2; t=$((t-2)); done
+  return 1
+}
+
+STARTED_ON_DEMAND=0
+stop_on_demand() {
+  if [[ "$STARTED_ON_DEMAND" == 1 && "${OC_KEEP_SERVER:-0}" != 1 ]]; then
+    echo "oc: stopping on-demand tier-$TIER server (:$PORT)" >&2
+    OPENCODE_TIER="$TIER" "$SERVER_SCRIPT" stop >/dev/null 2>&1 || true
+  fi
+}
+
+assert_server() {
+  [[ -x "$SERVER_SCRIPT" ]] || die3 "opencode-server script missing: $SERVER_SCRIPT"
+  if green; then return 0; fi
+  if [[ "$TIER" == 64 ]]; then
+    if launchd_loaded_64; then
+      # Loaded but red: it is (re)loading the 21 GB model. NEVER bootout a
+      # live service here — just wait for green.
+      echo "oc: resident tier-64 daemon is loaded but not green yet — waiting (model load)" >&2
+      wait_green 240 || die3 "resident tier-64 daemon did not reach green /health on :$PORT within 240s
+  Inspect: $SERVER_SCRIPT status   and /tmp/opencode-llama-server.log"
+    else
+      echo "oc: resident tier-64 daemon not installed — bootstrapping launchd service" >&2
+      OPENCODE_TIER=64 "$SERVER_SCRIPT" install >&2 || die3 "opencode-server install failed for tier-64"
+    fi
+  else
+    echo "oc: booting on-demand tier-$TIER server on :$PORT (stopped again on exit; OC_KEEP_SERVER=1 to keep)" >&2
+    OPENCODE_TIER="$TIER" "$SERVER_SCRIPT" start >&2 || die3 "opencode-server start failed for tier-$TIER"
+    STARTED_ON_DEMAND=1
+    trap stop_on_demand EXIT
+  fi
+  green || die3 "tier-$TIER server still not green on :$PORT"
+}
+
+# --- container invocation -----------------------------------------------------
+# Everything runs through docker compose in client/opencode: same image, same
+# mounts/extra_hosts (models.dev black-hole, host-gateway) as the harness.
+compose() {
+  docker compose -f "$COMPOSE_DIR/docker-compose.yml" --project-directory "$COMPOSE_DIR" "$@"
+}
+
+run_container() { # $@ = command inside the container; needs WORKSPACE + CONFIG_JSON + PROMPT_FILE set
+  local -a flags=(--rm -v "$PROMPT_FILE:$CONTAINER_PROMPT_PATH:ro")
+  [[ "$PUBLISH_PORTS" == 1 ]] && flags+=(--service-ports)
+  # No TTY (CI, pipes, probe): tell compose not to allocate one.
+  [[ -t 0 && -t 1 ]] || flags+=(-T)
+  WORKSPACE="$INVOKE_PWD" OPENCODE_CONFIG_JSON="$CONFIG_JSON" \
+    compose run "${flags[@]}" opencode "$@"
+}
+
+note_workspace() {
+  if ! git -C "$INVOKE_PWD" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    # Not fatal: global AGENTS.md injects in bare dirs too (#001 bonus finding).
+    echo "oc: note: $INVOKE_PWD is not a git repo (prompt still injects; OpenCode snapshots/undo want git)" >&2
+  fi
+}
+
+# --- subcommands ---------------------------------------------------------------
+cmd_status() {
+  resolve_prompt
+  echo "tier        : $TIER (port :$PORT)"
+  echo "config      : ${OPENCODE_CONFIG_JSON:-$TIER_CONFIG}"
+  echo "prompt      : $PROMPT_FILE  [$PROMPT_ORIGIN]"
+  if [[ -s "$PROMPT_FILE" && -r "$PROMPT_FILE" && -f "$PROMPT_FILE" ]]; then
+    echo "prompt check: OK ($(wc -c < "$PROMPT_FILE" | tr -d ' ') bytes)"
+  else
+    echo "prompt check: FAIL (missing/unreadable/empty — oc run would exit 2)"
+  fi
+  if green; then echo "server      : green (http://127.0.0.1:$PORT/health)"
+  else echo "server      : not green (oc would boot it: tier 64 → launchd, 16/32 → on-demand)"; fi
+}
+
+# Injection wire-capture oracle (#001's deterministic replacement for the
+# flaky behavioral PROOF check): point OpenCode at an in-container localhost
+# mock that records the /v1/chat/completions request body, run a trivial
+# prompt THROUGH THE NORMAL oc CONTAINER PATH (same prompt mount), then grep
+# the captured body for the AGENTS.md attribution line OpenCode emits when the
+# global prompt is actually injected.
+cmd_probe() {
+  assert_prompt
+  local ws cfg
+  ws="$(mktemp -d /tmp/oc-probe.XXXXXX)"
+  cfg="$ws/opencode.probe.json"
+  cat > "$cfg" <<'EOF'
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "llama-local": {
+      "name": "oc probe capture mock",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "http://127.0.0.1:9099/v1", "apiKey": "sk-local-no-auth" },
+      "models": { "opencode": { "name": "oc probe capture mock" } }
+    }
+  },
+  "model": "llama-local/opencode"
+}
+EOF
+  cat > "$ws/_mock.js" <<'EOF'
+// Minimal OpenAI-compatible capture endpoint (in-container 127.0.0.1 —
+// sidesteps the macOS-firewall problem that kills host-side mocks, see #001).
+const http = require('http'), fs = require('fs');
+http.createServer((req, res) => {
+  let body = '';
+  req.on('data', c => body += c);
+  req.on('end', () => {
+    fs.appendFileSync('/workspace/_capture.jsonl', JSON.stringify({url: req.url, body}) + '\n');
+    res.writeHead(200, {'content-type': 'application/json'});
+    res.end(JSON.stringify({id: 'mock', object: 'chat.completion', created: 0, model: 'opencode',
+      choices: [{index: 0, message: {role: 'assistant', content: 'ok'}, finish_reason: 'stop'}],
+      usage: {prompt_tokens: 1, completion_tokens: 1, total_tokens: 2}}));
+  });
+}).listen(9099, '127.0.0.1');
+EOF
+  echo "oc: probe: prompt source = $PROMPT_FILE [$PROMPT_ORIGIN]" >&2
+  echo "oc: probe: workspace = $ws (kept on failure)" >&2
+  # Drive it through the standard container path: same compose service, same
+  # AGENTS.md mount — only $PWD and the config are swapped for the mock.
+  local saved_pwd="$INVOKE_PWD" saved_cfg="${CONFIG_JSON:-}"
+  INVOKE_PWD="$ws" CONFIG_JSON="$cfg" run_container \
+    sh -c 'node /workspace/_mock.js & sleep 1; timeout 90 opencode run "say hi" >/dev/null 2>&1; true' || true
+  INVOKE_PWD="$saved_pwd"; CONFIG_JSON="$saved_cfg"
+  if [[ -s "$ws/_capture.jsonl" ]] && grep -q "Instructions from: $CONTAINER_PROMPT_PATH" "$ws/_capture.jsonl"; then
+    echo "oc: probe PASS — agent system prompt contains 'Instructions from: $CONTAINER_PROMPT_PATH'"
+    rm -rf "$ws"
+    return 0
+  fi
+  echo "oc: probe FAIL — the global prompt did NOT reach the agent system prompt." >&2
+  echo "  capture: $ws/_capture.jsonl ($(wc -c < "$ws/_capture.jsonl" 2>/dev/null || echo 0) bytes)" >&2
+  exit 2
+}
+
+case "$SUBCMD" in
+  status) cmd_status; exit 0 ;;
+  probe)  cmd_probe;  exit $? ;;
+esac
+
+# --- the daily-driver paths: bare `oc` (TUI) and `oc run` ---------------------
+assert_prompt
+assert_config
+assert_server
+note_workspace
+
+if [[ "$SUBCMD" == "run" ]]; then
+  [[ $# -ge 1 ]] || die "oc run needs a prompt: oc run \"<prompt>\""
+  echo "oc: tier-$TIER (:$PORT) | workspace $INVOKE_PWD | prompt [$PROMPT_ORIGIN]" >&2
+  rc=0; run_container opencode run "$@" || rc=$?
+  stop_on_demand; trap - EXIT
+  exit "$rc"
+else
+  # Interactive TUI. OpenCode's full-screen TUI needs a real terminal.
+  [[ -t 0 && -t 1 ]] || die "bare \`oc\` opens the interactive TUI and needs a TTY — use \`oc run \"<prompt>\"\` for headless"
+  echo "oc: tier-$TIER (:$PORT) | workspace $INVOKE_PWD | prompt [$PROMPT_ORIGIN]" >&2
+  rc=0; run_container opencode || rc=$?
+  stop_on_demand; trap - EXIT
+  exit "$rc"
+fi

@@ -16,6 +16,21 @@ binary on PATH, version pinned via build arg.
 llama-server's openai-compatible endpoint (which needs no auth). See
 [Run / wiring](#run--wiring) below.
 
+## `oc` — the daily-driver wrapper (migration #003)
+
+[`bin/oc`](bin/oc) is the one-command front door (migration decision §2.10):
+from any directory, `oc` opens the OpenCode TUI on `$PWD` and `oc run "<prompt>"`
+does a headless one-shot — asserting the tier server is green (booting it if
+not), mounting `$PWD` at `/workspace` plus the tier-matched `opencode.json`
+**and the global prompt** (`AGENTS.md`, the #001 winner) into the container.
+Prompt-injection preconditions are asserted **fail-loud** (exit 2) because
+injection failure is silent in OpenCode; `oc probe` is the deterministic
+wire-capture injection oracle. Tier select: `oc -t 16|32|64` (non-64 boots the
+on-demand server and stops it on exit). Run `oc help` for the full contract.
+The wizard (#007) installs `bin/oc` onto PATH; until then, symlink it or call
+it by path. Note `autoupdate: false` in the mounted configs: the TUI would
+otherwise self-update past the image's pinned `OPENCODE_VERSION` mid-session.
+
 ## Why no build stage
 
 claw-code compiles `claw` from Rust source in a `rust:bookworm` builder stage.
