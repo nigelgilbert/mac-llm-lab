@@ -180,3 +180,76 @@ Launched in parallel (both consume the resident `:11436` daemon read-only):
 ## T4 — started 2026-06-10
 
 - #007 wizard-opencode-client-smoke (launched)
+
+### #007 — ✅ complete
+
+- New wizard steps: 52 (opencode:local image, pin-checked; client-only
+  renders gitignored opencode.remote*.json against OPENCODE_HOST),
+  53 (repo system-prompt → ~/.config/opencode/AGENTS.md, cmp-idempotent,
+  warn-don't-clobber), 54 (~/.local/bin/oc symlink, step-42 convention),
+  61 (new-stack smoke: `oc probe` wire-capture assertion + `oc run`
+  artifact in a fresh git workspace). Doctor: read-only client section.
+- Tester 92/92 (+20 tests); second install fully idempotent (17 "already
+  done" lines); resident daemon pid 31147 unchanged across five runs.
+- **Cross-issue catch:** #003's "symlink to PATH works" was false (dirname
+  didn't follow symlinks) — fixed in bin/oc with a readlink loop; also
+  added additive OC_SERVER_HOST (remote servers health-checked, never
+  lifecycled) enabling client-only.
+- client-only verified via this machine's real LAN IP (192.168.1.209) —
+  caveat: same physical machine, no second Mac available.
+
+### T4 coherence check — PASS
+
+- All seven autonomous tickets ✅ with evidence. Health: claw 200, oc-64
+  200, litellm 401-auth (up); :11437/:11438 free; `~/.local/bin/oc status`
+  green from /tmp (prompt installed + content-OK, server green).
+- Holistic state: a fresh `wizard install` now produces the complete new
+  stack (serving 51 + client 52–54 + smoke 61) without touching claw;
+  `oc` is daily-driver-ready for #004.
+
+## PAUSE POINT — context for /compact and final verification
+
+**Done (commits):** T1 48e9db3 (#002 #005 #009) · T2 9bf5593 (#001 #006) ·
+T3 b769849 (#003) · T4 = this commit (#007).
+
+**Remaining:** #004 (HITL — user does a real task via `oc`, records
+go/no-go; gates everything below) → #008 (gut claw: tag claw-stack-final,
+delete claw prod stack, also needs #005 ✓ #007 ✓) → #010 (harness
+opencode-native, needs #008 + #009 ✓) → #011 (tier-32 smoke, needs #007 ✓
++ #010).
+
+**System state at pause:** resident oc-64 daemon :11436 green (launchd,
+pid 31147); claw :11435 + litellm :4000 still co-resident (until #008);
+:11437/:11438 free; `~/.local/bin/oc` + `~/.config/opencode/AGENTS.md`
+installed; images `opencode:local` (1.16.2, autoupdate off) and
+`mac-llm-lab-eval-runner:local` built.
+
+**Deviations/corrections registry (final verification should re-check):**
+1. #005 — sidecar-port canonical registry is 1024 rows, ticket said 1025
+   (smoke row in a separate non-canonical file). README documents it.
+2. #009 — "reuse-registry mode" criterion verified in default
+   fresh-registry mode instead (REGISTRY_OUT split-file gotcha). If a
+   literal reuse-registry run is wanted, lift the restriction for
+   SKIP_PHASE_A=1 only.
+3. #001 — behavioral PROOF oracle failed known-positive validation;
+   wire-capture oracle is the instrument of record. FINDING-2's bare-dir
+   "global no-ops" row corrected (was a behavioral false negative).
+4. #002 — tier-32 support added to opencode-server (ticket interface
+   implied it); #003 added opencode.32.json. Pre-wires #011.
+5. #003→#007 — #003's symlink-to-PATH claim was wrong; fixed during #007.
+   Final verification should re-run `oc` via the symlink, not in-repo.
+6. #006 — pre-existing wizard probe.sh ENTRYPOINT bug fixed (out of
+   ticket scope, wizard-internal).
+7. #007 — client-only smoke traversed real LAN IP but same physical
+   machine; image rebuild act-path covered by selftest stubs only.
+
+**Suggested final-verification sweep (post-#004):** (a) re-walk each
+ticket's acceptance boxes against its Result evidence; (b) fresh
+`wizard install` + `wizard doctor` transcript; (c) `oc run` + `oc probe`
+via the PATH symlink from a brand-new git repo; (d) tester suite;
+(e) re-derive one registry CI from host/test/docs/data; (f) confirm claw
+co-residence untouched (pre-#008 baseline for the gut).
+
+**#004 handoff (user):** use `oc` for one real piece of work in a real
+repo; capture friction list; record explicit go/no-go for #008 in the
+ticket. `oc` is on PATH; `oc help` for usage; tier-16/32 via `-t`.

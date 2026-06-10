@@ -34,6 +34,12 @@
 #   OPENCODE_CONFIG_JSON     escape hatch: override the tier-matched
 #                            opencode.json mounted into the container
 #                            (absolute path; used by probes/sweeps)
+#   OC_SERVER_HOST           where the tier llama-server lives (default
+#                            127.0.0.1). Set to the serving Mac's LAN address
+#                            in the wizard's client-only topology (#007),
+#                            paired with OPENCODE_CONFIG_JSON pointing at a
+#                            rendered opencode.remote*.json. oc cannot
+#                            boot/stop a remote server: red remote = exit 3.
 #   OC_KEEP_SERVER=1         leave an on-demand (tier 16/32) server running
 #                            after the session instead of stopping it
 #
@@ -61,7 +67,16 @@
 # ============================================================================
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Self-locate THROUGH symlinks: the wizard (#007) installs ~/.local/bin/oc as
+# a symlink here, and a bare dirname of BASH_SOURCE would resolve to the
+# symlink's dir (~/.local/bin) and break every COMPOSE_DIR/REPO_ROOT path.
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_SOURCE" ]]; do
+  SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+  SCRIPT_SOURCE="$(readlink "$SCRIPT_SOURCE")"
+  [[ "$SCRIPT_SOURCE" != /* ]] && SCRIPT_SOURCE="$SCRIPT_DIR/$SCRIPT_SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
 COMPOSE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"              # client/opencode
 REPO_ROOT="$(cd "$COMPOSE_DIR/../.." && pwd)"            # mac-llm-lab-1
 SERVER_SCRIPT="$REPO_ROOT/host/llama-server/scripts/opencode-server"
@@ -137,7 +152,10 @@ assert_config() {
 }
 
 # --- tier server lifecycle ---------------------------------------------------
-green() { [[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health" 2>/dev/null)" == "200" ]]; }
+# OC_SERVER_HOST (#007 client-only): non-local servers are health-checked but
+# never lifecycled — oc can't launchctl/start a daemon on another Mac.
+SERVER_HOST="${OC_SERVER_HOST:-127.0.0.1}"
+green() { [[ "$(curl -s -o /dev/null -w '%{http_code}' "http://$SERVER_HOST:$PORT/health" 2>/dev/null)" == "200" ]]; }
 
 launchd_loaded_64() { launchctl print "gui/$(id -u)/com.mac-llm-lab.opencode-server" >/dev/null 2>&1; }
 
@@ -156,6 +174,12 @@ stop_on_demand() {
 }
 
 assert_server() {
+  if [[ "$SERVER_HOST" != "127.0.0.1" ]]; then
+    green || die3 "remote server not green at http://$SERVER_HOST:$PORT/health
+  oc cannot boot/lifecycle a remote server (OC_SERVER_HOST=$SERVER_HOST) —
+  bring the tier daemon up on the serving Mac, then retry."
+    return 0
+  fi
   [[ -x "$SERVER_SCRIPT" ]] || die3 "opencode-server script missing: $SERVER_SCRIPT"
   if green; then return 0; fi
   if [[ "$TIER" == 64 ]]; then
@@ -212,7 +236,9 @@ cmd_status() {
   else
     echo "prompt check: FAIL (missing/unreadable/empty — oc run would exit 2)"
   fi
-  if green; then echo "server      : green (http://127.0.0.1:$PORT/health)"
+  if green; then echo "server      : green (http://$SERVER_HOST:$PORT/health)"
+  elif [[ "$SERVER_HOST" != "127.0.0.1" ]]; then
+    echo "server      : not green at $SERVER_HOST:$PORT (remote — oc will NOT boot it; exit 3)"
   else echo "server      : not green (oc would boot it: tier 64 → launchd, 16/32 → on-demand)"; fi
 }
 

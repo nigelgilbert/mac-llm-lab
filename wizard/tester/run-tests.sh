@@ -517,6 +517,212 @@ fi
 rm -f "$TARGET_GGUF"
 export HOME="$HOME_SAVE"
 
+# --- #007 opencode client steps (52/53/54/61) -------------------------------
+# Section 3 leaves REPO_ROOT pointing at a key-test scratch dir; these steps
+# resolve sources under ${REPO_ROOT}/client + ${REPO_ROOT}/host, so reset it.
+REPO_ROOT="$RW"
+# 52: image pin check via stubbed docker. Pin source = client/opencode/.env,
+# read-back = buildkit layer history.
+OC_ENV_SAVE=""
+[ -f "$RW/client/opencode/.env" ] && OC_ENV_SAVE=$(cat "$RW/client/opencode/.env")
+printf 'OPENCODE_VERSION=2.0.0\n' > "$RW/client/opencode/.env"
+mkdir -p "$SHIMS"
+make_docker52() { # $1 = inspect rc, $2 = history line (may be empty)
+  cat >"$SHIMS/docker" <<EOF
+#!/bin/sh
+case "\$*" in
+  "image inspect opencode:local") exit $1 ;;
+  "image history --no-trunc opencode:local") printf '%s\n' '$2' ;;
+  *) exit 0 ;;
+esac
+EOF
+  chmod +x "$SHIMS/docker"
+}
+export PATH="$SHIMS:$ORIG_PATH"
+
+make_docker52 0 'RUN |1 OPENCODE_VERSION=2.0.0 /bin/sh -c apt-get update'
+if step_52_image_ok; then
+  t_ok "step_52_image_ok: image present + pin matches -> true"
+else
+  t_not_ok "step_52_image_ok pin match"
+fi
+
+make_docker52 0 'RUN |1 OPENCODE_VERSION=9.9.9 /bin/sh -c apt-get update'
+if ! step_52_image_ok; then
+  t_ok "step_52_image_ok: image present but pin MISMATCH -> false (rebuild path)"
+else
+  t_not_ok "step_52_image_ok pin mismatch should be false"
+fi
+
+make_docker52 0 ''
+if step_52_image_ok; then
+  t_ok "step_52_image_ok: pin undeterminable from history -> presence accepted (never rebuild blind)"
+else
+  t_not_ok "step_52_image_ok undeterminable should accept presence"
+fi
+
+make_docker52 1 ''
+if ! step_52_image_ok; then
+  t_ok "step_52_image_ok: image absent -> false"
+else
+  t_not_ok "step_52_image_ok absent should be false"
+fi
+export PATH="$ORIG_PATH"
+rm -f "$SHIMS"/*
+# restore the RW .env (the section-7 hot-sim reads it)
+if [ -n "$OC_ENV_SAVE" ]; then printf '%s\n' "$OC_ENV_SAVE" > "$RW/client/opencode/.env"
+else rm -f "$RW/client/opencode/.env"; fi
+
+# 52: tier-config verification (autoupdate pinned false + own tier port)
+if step_52_config_ok opencode.json 11436 \
+   && step_52_config_ok opencode.16.json 11437 \
+   && step_52_config_ok opencode.32.json 11438; then
+  t_ok "step_52_config_ok: repo tier configs pass (autoupdate:false + tier port)"
+else
+  t_not_ok "step_52_config_ok repo configs"
+fi
+printf '{ "provider": { "x": { "options": { "baseURL": "http://h:11436/v1" } } } }\n' \
+  > "$RW/client/opencode/opencode.bad.json"
+if ! step_52_config_ok opencode.bad.json 11436; then
+  t_ok "step_52_config_ok: config without autoupdate:false -> rejected (#003 TUI self-update)"
+else
+  t_not_ok "step_52_config_ok should reject missing autoupdate pin"
+fi
+rm -f "$RW/client/opencode/opencode.bad.json"
+
+# 52: client-only remote render — host swapped in, idempotent second call
+out=$(step_52_render_remote "labbox.lan" 2>&1)
+if [ -f "$RW/client/opencode/opencode.remote.json" ] \
+   && grep -q 'labbox.lan:11436' "$RW/client/opencode/opencode.remote.json" \
+   && ! grep -q 'host.docker.internal' "$RW/client/opencode/opencode.remote.json" \
+   && grep -q 'labbox.lan:11437' "$RW/client/opencode/opencode.remote.16.json" \
+   && grep -q 'labbox.lan:11438' "$RW/client/opencode/opencode.remote.32.json"; then
+  t_ok "step_52_render_remote: all three tier configs rendered with the LAN host"
+else
+  t_not_ok "step_52_render_remote render" "$out"
+fi
+out=$(step_52_render_remote "labbox.lan" 2>&1)
+if printf '%s' "$out" | grep -q 'already done'; then
+  t_ok "step_52_render_remote: second call with same host -> already done"
+else
+  t_not_ok "step_52_render_remote idempotency" "$out"
+fi
+out=$(step_52_render_remote "otherbox.lan" 2>&1)
+if grep -q 'otherbox.lan:11436' "$RW/client/opencode/opencode.remote.json"; then
+  t_ok "step_52_render_remote: changed host re-renders (derived file, no stale config)"
+else
+  t_not_ok "step_52_render_remote host change" "$out"
+fi
+rm -f "$RW/client/opencode"/opencode.remote*.json
+
+# 53: global prompt install — content compare, install, never-clobber
+HOME_SAVE53="$HOME"
+export HOME="$LOGS/fakehome53"
+mkdir -p "$HOME"
+if ! step_53_is_done; then
+  t_ok "step_53_is_done: AGENTS.md missing -> false"
+else
+  t_not_ok "step_53_is_done missing should be false"
+fi
+out=$(step_53_main 2>&1)
+if step_53_is_done && cmp -s "$RW/host/llama-server/docs/system-prompt.md" \
+                             "$HOME/.config/opencode/AGENTS.md"; then
+  t_ok "step_53_main: installs AGENTS.md matching repo system-prompt.md"
+else
+  t_not_ok "step_53_main install" "$out"
+fi
+out=$(step_53_main 2>&1)
+if printf '%s' "$out" | grep -q 'already done'; then
+  t_ok "step_53_main: second run -> already done"
+else
+  t_not_ok "step_53_main idempotency" "$out"
+fi
+printf '\nUSER CUSTOMIZATION\n' >> "$HOME/.config/opencode/AGENTS.md"
+out=$(step_53_main 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'USER CUSTOMIZATION' "$HOME/.config/opencode/AGENTS.md" \
+   && printf '%s' "$out" | grep -q 'DIFFERENT'; then
+  t_ok "step_53_main: customized AGENTS.md NOT clobbered (warns, rc=0)"
+else
+  t_not_ok "step_53_main never-clobber" "rc=$rc"
+fi
+# missing/empty source must fail loud (it would install a null prompt)
+( REPO_ROOT="$LOGS/empty-repo53"; mkdir -p "$REPO_ROOT"; step_53_main >/dev/null 2>&1 )
+[ $? -ne 0 ] && t_ok "step_53_main: missing prompt source -> nonzero (no null prompt)" \
+  || t_not_ok "step_53_main missing source should fail"
+export HOME="$HOME_SAVE53"
+
+# 54: oc symlink onto PATH — install, idempotent, never-clobber, dangling fix
+HOME_SAVE54="$HOME"
+export HOME="$LOGS/fakehome54"
+mkdir -p "$HOME"
+if ! step_54_is_done; then
+  t_ok "step_54_is_done: no symlink -> false"
+else
+  t_not_ok "step_54_is_done missing should be false"
+fi
+out=$(step_54_main 2>&1)
+if step_54_is_done && [ "$(readlink "$HOME/.local/bin/oc")" = "$RW/client/opencode/bin/oc" ]; then
+  t_ok "step_54_main: symlinks ~/.local/bin/oc -> repo oc"
+else
+  t_not_ok "step_54_main symlink" "$out"
+fi
+out=$(step_54_main 2>&1)
+if printf '%s' "$out" | grep -q 'already done'; then
+  t_ok "step_54_main: second run -> already done"
+else
+  t_not_ok "step_54_main idempotency" "$out"
+fi
+rm -f "$HOME/.local/bin/oc"
+printf '#!/bin/sh\necho foreign\n' > "$HOME/.local/bin/oc"
+chmod +x "$HOME/.local/bin/oc"
+out=$(step_54_main 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && [ ! -L "$HOME/.local/bin/oc" ] \
+   && grep -q 'foreign' "$HOME/.local/bin/oc" \
+   && printf '%s' "$out" | grep -qi 'leaving as-is'; then
+  t_ok "step_54_main: foreign oc at target NOT clobbered (warns, rc=0)"
+else
+  t_not_ok "step_54_main never-clobber" "rc=$rc"
+fi
+rm -f "$HOME/.local/bin/oc"
+ln -s /does/not/exist "$HOME/.local/bin/oc"
+out=$(step_54_main 2>&1)
+if step_54_is_done; then
+  t_ok "step_54_main: dangling symlink replaced (debris, not user intent)"
+else
+  t_not_ok "step_54_main dangling replace" "$out"
+fi
+export HOME="$HOME_SAVE54"
+
+# 61: smoke preconditions + client-only no-LAN-host explicit skip
+HOME_SAVE61="$HOME"
+export HOME="$LOGS/fakehome61"
+mkdir -p "$HOME/.local/bin"
+WIZARD_STATE_FILE="$LOGS/state-step61.txt"; rm -f "$WIZARD_STATE_FILE"
+state_set TOPOLOGY client-only
+state_set OPENCODE_HOST nohost.invalid
+out=$(step_61_main 2>&1); rc=$?
+if [ "$rc" -ne 0 ]; then
+  t_ok "step_61_main: oc not installed -> nonzero (smoke can't pass vacuously)"
+else
+  t_not_ok "step_61_main missing oc should fail" "$out"
+fi
+ln -s "$RW/client/opencode/bin/oc" "$HOME/.local/bin/oc"
+cat >"$SHIMS/curl" <<'EOF'
+#!/bin/sh
+exit 22
+EOF
+chmod +x "$SHIMS/curl"
+export PATH="$SHIMS:$ORIG_PATH"
+out=$(step_61_main 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'SKIPPED'; then
+  t_ok "step_61_main: client-only + unreachable LAN host -> explicit SKIP, rc=0"
+else
+  t_not_ok "step_61_main client-only skip" "rc=$rc: $(printf '%s' "$out" | head -c 200)"
+fi
+export PATH="$ORIG_PATH"
+rm -f "$SHIMS"/*
+export HOME="$HOME_SAVE61"
+
 # ============================================================================
 # 6. ENTRYPOINT DISPATCHER (bash + zsh)
 # ============================================================================
@@ -587,8 +793,9 @@ EOF
 
 # launchctl: pretend service is loaded.
 make_logger launchctl 'exit 0'
-# curl: pretend health probe + everything 200.
-make_logger curl 'exit 0'
+# curl: pretend health probe + everything 200. Echo the code too: oc's
+# green() (exercised by step 61) reads `-w %{http_code}` from stdout.
+make_logger curl 'echo 200'
 # docker: report "running" for managed containers, image inspect succeeds.
 cat >"$SHIMS/docker" <<EOF
 #!/bin/sh
@@ -600,6 +807,7 @@ case "\$*" in
   "image inspect "*) exit 0 ;;
   "compose "*"up "*) echo "REFUSED: compose up should not run when already running" >> "$TRACE"; exit 99 ;;
   "compose "*"build"*) echo "REFUSED: compose build should be image-cached" >> "$TRACE"; exit 99 ;;
+  "build "*) echo "REFUSED: docker build should be image-cached (step 52)" >> "$TRACE"; exit 99 ;;
   *) exit 0 ;;
 esac
 EOF
@@ -708,6 +916,15 @@ if grep -q 'probe_models\|/v1/models' "$REPO/wizard/steps/60-smoke.sh" 2>/dev/nu
   t_ok "60-smoke.sh: calls models probe, not deep"
 else
   t_not_ok "60-smoke.sh deep-gate" "step calls deep mode"
+fi
+# 61-opencode-smoke (#007): must assert BOTH the injection wire-capture probe
+# (`oc probe`, the #001 oracle) and a real run artifact; no legacy bridge probes.
+if grep -q '"$oc" probe' "$REPO/wizard/steps/61-opencode-smoke.sh" 2>/dev/null \
+   && grep -q 'smoke.txt' "$REPO/wizard/steps/61-opencode-smoke.sh" \
+   && ! grep -q 'probe_deep\|probe_models\|probe_bridge' "$REPO/wizard/steps/61-opencode-smoke.sh"; then
+  t_ok "61-opencode-smoke.sh: injection probe + oc-run artifact, no legacy probes"
+else
+  t_not_ok "61-opencode-smoke.sh assertions" "expected oc probe + smoke.txt checks"
 fi
 
 # ============================================================================

@@ -77,9 +77,16 @@ cmd_install() {
   # remain until #008 retires them.
   step_51_main
   step_49_main
-  # Bring-up + smoke.
+  # OpenCode client (#007): container image + tier configs, global prompt
+  # (~/.config/opencode/AGENTS.md), `oc` wrapper on PATH. Both topologies.
+  step_52_main || { fail "opencode client image/config step failed"; return 1; }
+  step_53_main || { fail "global prompt install failed"; return 1; }
+  step_54_main || { fail "oc wrapper install failed"; return 1; }
+  # Bring-up + smoke (60 = legacy claw/bridge smoke until #008; 61 = the
+  # opencode stack: injection wire-capture probe + a real `oc run` artifact).
   step_50_main
   step_60_main || true
+  step_61_main || true
   hdr "Done"
   printf "  log: %s\n\n" "$(log_path)"
 }
@@ -177,6 +184,47 @@ cmd_doctor() {
       info "opencode tier-${t} — not resident (:${p} quiet)"
     fi
   done
+
+  hdr "OpenCode client (read-only)"
+  # Image / oc-on-PATH / global prompt / tier configs — pure inspection (#007).
+  local iv oc_link agents prompt_src cfg missing_cfg
+  if command -v docker >/dev/null 2>&1 && docker image inspect opencode:local >/dev/null 2>&1; then
+    iv=$(docker image history --no-trunc opencode:local 2>/dev/null \
+           | grep -oE 'OPENCODE_VERSION=[0-9][^ ]*' | head -n1 | cut -d= -f2)
+    ok "opencode:local image present${iv:+ (pin ${iv})}"
+  else
+    warn "opencode:local image missing (wizard install builds it)"
+  fi
+  oc_link="${HOME}/.local/bin/oc"
+  if [ -L "$oc_link" ] && [ -x "$oc_link" ]; then
+    ok "oc on PATH — ${oc_link} -> $(readlink "$oc_link")"
+  elif [ -e "$oc_link" ]; then
+    warn "oc at ${oc_link} exists but is not the wizard's symlink"
+  else
+    warn "oc not installed (${oc_link})"
+  fi
+  agents="${HOME}/.config/opencode/AGENTS.md"
+  prompt_src="${REPO_ROOT}/host/llama-server/docs/system-prompt.md"
+  if [ -f "$agents" ] && [ -s "$agents" ]; then
+    if cmp -s "$agents" "$prompt_src"; then
+      ok "global prompt installed — matches repo system-prompt.md"
+    else
+      warn "global prompt present but DIFFERS from repo system-prompt.md (customized?)"
+    fi
+  elif [ -e "$agents" ]; then
+    warn "global prompt at ${agents} is empty/irregular — oc run would exit 2"
+  else
+    warn "global prompt not installed (${agents}) — oc falls back to the repo source"
+  fi
+  missing_cfg=""
+  for cfg in opencode.json opencode.16.json opencode.32.json; do
+    [ -f "${REPO_ROOT}/client/opencode/${cfg}" ] || missing_cfg="${missing_cfg} ${cfg}"
+  done
+  if [ -z "$missing_cfg" ]; then
+    ok "tier configs present (client/opencode/opencode.json/.16/.32)"
+  else
+    warn "tier configs missing:${missing_cfg}"
+  fi
 
   hdr "Bridge probe"
   local bh bp

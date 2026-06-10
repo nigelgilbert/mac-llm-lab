@@ -3,3 +3,6 @@ workspace/
 # Per-run runner sidecars (runOpenCode, #010): run_summary.json + iterations.jsonl
 # + smoke scratch. Analog of host/test/.claw-runtime; never committed.
 .opencode-runtime/
+# Wizard-rendered client-only configs (step 52, #007): tier configs with
+# host.docker.internal swapped for the LAN serving host. Derived, per-machine.
+opencode.remote*.json

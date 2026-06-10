@@ -45,6 +45,15 @@ The wizard owns `wizard/` and writes generated env files into:
 
 - `client/claw-code/.env` (full-local + client-only)
 - `host/litellm/.env`     (full-local only)
+- `client/opencode/opencode.remote{,.16,.32}.json` (client-only; tier configs
+  pointed at the LAN serving host — derived, gitignored)
+
+OpenCode client install surface (#007, both topologies):
+
+- `~/.config/opencode/AGENTS.md` — the global agent prompt (copy of
+  `host/llama-server/docs/system-prompt.md`; an existing customized file is
+  never overwritten)
+- `~/.local/bin/oc` — symlink to `client/opencode/bin/oc`
 
 Plus runtime state in `wizard/.state` (chmod 600; stores the LiteLLM master
 key) and logs in `wizard/.logs/`. Both gitignored.
