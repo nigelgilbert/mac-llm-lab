@@ -71,6 +71,11 @@ cmd_install() {
     step_47_main
     step_48_main
   fi
+  # OpenCode serving (migration decision §2.5): the launchd resident
+  # llama-server for the chosen tier — the claw-server role's successor for
+  # new installs. Self-skips in client-only topology. Claw steps 47/48/49
+  # remain until #008 retires them.
+  step_51_main
   step_49_main
   # Bring-up + smoke.
   step_50_main
@@ -141,6 +146,37 @@ cmd_doctor() {
   else
     warn "docker daemon not reachable"
   fi
+
+  hdr "OpenCode serving (read-only)"
+  # Tier map mirrors steps/51-opencode-server.sh / scripts/opencode-server.
+  # launchctl print + curl GET /health only — never mutates launchd state.
+  local entry t p l uid loaded green
+  uid=$(id -u)
+  for entry in \
+    "64 11436 com.mac-llm-lab.opencode-server" \
+    "16 11437 com.mac-llm-lab.opencode-server-16" \
+    "32 11438 -"; do
+    set -- $entry
+    t=$1; p=$2; l=$3
+    loaded=no; green=no
+    if [ "$l" != "-" ] && launchctl print "gui/${uid}/${l}" >/dev/null 2>&1; then
+      loaded=yes
+    fi
+    if curl -fsS --max-time 3 "http://127.0.0.1:${p}/health" >/dev/null 2>&1; then
+      green=yes
+    fi
+    if [ "$green" = yes ] && [ "$loaded" = yes ]; then
+      ok "opencode tier-${t} — launchd loaded, /health green on :${p}"
+    elif [ "$green" = yes ]; then
+      ok "opencode tier-${t} — /health green on :${p} (direct-boot, not launchd)"
+    elif [ "$loaded" = yes ]; then
+      warn "opencode tier-${t} — launchd loaded but /health not green on :${p} (model loading?)"
+    elif [ "$l" = "-" ]; then
+      info "opencode tier-${t} — not running (on-demand only; no launchd path by design)"
+    else
+      info "opencode tier-${t} — not resident (:${p} quiet)"
+    fi
+  done
 
   hdr "Bridge probe"
   local bh bp

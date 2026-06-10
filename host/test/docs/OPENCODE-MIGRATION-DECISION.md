@@ -83,6 +83,10 @@ markdown. Nothing irreplaceable remains.
    dirs; in git projects they are untested). Fallback if it no-ops:
    committed per-repo `AGENTS.md`. Injection failure is silent — whatever
    mechanism wins, the wrapper should assert it (e.g. probe on install).
+   **GATE RESOLVED 2026-06-10 (#001): global `~/.config/opencode/AGENTS.md`
+   wins — wire-level capture confirms it injects (git-rooted AND bare; the
+   FINDING-2 bare-dir no-op was a behavioral false negative), `instructions[]`
+   also injects, control clean; details + oracle caveat in issues/001.**
 7. **Tier-32: adopt by extrapolation + functional smoke.** Tier-32 is the
    same 9B at Q5_K_XL, so the tier-16 finding transfers on model identity.
    With claw gone there is no comparative decision left — only serving

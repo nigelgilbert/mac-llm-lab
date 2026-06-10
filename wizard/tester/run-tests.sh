@@ -405,6 +405,51 @@ else
   t_not_ok "step_47_main client-only" "rc=$?"
 fi
 
+# 51-opencode-server: same never-bootout contract as 47, parameterized by tier.
+# Shim state here: launchctl exit 0 (loaded), curl exit 22 (unhealthy).
+step_51_resolve 64
+if ! step_51_is_done; then
+  t_ok "step_51_is_done: tier-64 loaded-but-unhealthy -> false"
+else
+  t_not_ok "step_51_is_done loaded-unhealthy should be false"
+fi
+
+cat >"$SHIMS/curl" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$SHIMS/curl"
+if step_51_is_done; then
+  t_ok "step_51_is_done: tier-64 loaded+healthy -> true (never bootout a green daemon)"
+else
+  t_not_ok "step_51_is_done loaded+healthy"
+fi
+
+step_51_resolve 16
+[ "$OC_PORT" = "11437" ] && [ "$OC_LABEL" = "com.mac-llm-lab.opencode-server-16" ] \
+  && t_ok "step_51_resolve: tier-16 -> :11437 / -16 label" \
+  || t_not_ok "step_51_resolve tier-16" "port=$OC_PORT label=$OC_LABEL"
+
+step_51_resolve 32
+[ "$OC_PORT" = "11438" ] && [ -z "$OC_LABEL" ] \
+  && t_ok "step_51_resolve: tier-32 -> :11438, no launchd label (on-demand only)" \
+  || t_not_ok "step_51_resolve tier-32" "port=$OC_PORT label=$OC_LABEL"
+
+if ! step_51_resolve 99; then
+  t_ok "step_51_resolve: invalid tier -> nonzero"
+else
+  t_not_ok "step_51_resolve invalid tier should fail"
+fi
+
+# step_51_main with TOPOLOGY=client-only short-circuits (skip path).
+WIZARD_STATE_FILE="$LOGS/state-step51.txt"; rm -f "$WIZARD_STATE_FILE"
+state_set TOPOLOGY client-only
+if step_51_main >/dev/null 2>&1; then
+  t_ok "step_51_main: client-only topology returns 0 without invoking installer"
+else
+  t_not_ok "step_51_main client-only" "rc=$?"
+fi
+
 export PATH="$ORIG_PATH"
 rm -f "$SHIMS"/*
 
