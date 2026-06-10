@@ -336,3 +336,35 @@ is strictly serial: #008 → #010 → #011 (one agent per tranche).
 ## T7 — started 2026-06-10 (final issue)
 
 - #011 tier32-functional-smoke (launched)
+
+### #011 — ✅ complete (suite finished)
+
+- Tier-32 fingerprint added to model_configs.json
+  (qwen35-9b-q5kxl-ctx64k-v7noreppen-pp01-opencode-prompt, §4 scope note
+  embedded); config.js selector + test updated; suite 144/144 green.
+- :11438 green + probe 3/3 PASS (closed think block, both modes); wizard
+  smoke at slider 32 green (injection + artifact); state restored.
+- 8/8 driver cells → registry rows all hardware_tier:32, single correct
+  fingerprint, zero harness_error (1 genuine task fail on wordy — clean
+  row; no comparative claim per §4). Driver + gate rc=0.
+- Note: agent session ended mid-sweep ("standing by" for the driver);
+  orchestrator finished the watch, verified rows, stopped :11438, wrote
+  the ticket Result.
+
+### T7 / FINAL coherence check — PASS
+
+- All 11 issues ✅. Lab end-state: resident oc-64 :11436 green (pid 31147,
+  unchanged since #002 installed it); :11435/:4000/:11437/:11438 closed;
+  launchd lists only com.mac-llm-lab.opencode-server; tag claw-stack-final
+  archives the old stack; harness suite 144 pass / 0 fail.
+- The migration is complete: serving (launchd daemon + on-demand tiers),
+  client (oc wrapper + global AGENTS.md + wizard install end-to-end),
+  evidence (registries in-repo, CIs re-derivable), harness (opencode-native
+  config-vs-config driver), tier-32 validated. claw fully retired.
+
+## SUITE COMPLETE — 2026-06-10
+
+Commits: 48e9db3 (T1) · 9bf5593 (T2) · b769849 (T3) · 3bd46f1 (T4) ·
+8d6d93d (#004 GO) · 04e7375 (T5 gut) · df50d21 (T6 harness) · T7 = this
+commit (#011). Final verification sweep can follow the checklist in the
+PAUSE POINT section above (items a–f), now extended to #008–#011.

@@ -86,6 +86,10 @@ export function resolveConfigId(env = process.env) {
 const OPENCODE_MODEL_CONFIG_ID_BY_TIER = {
   '64': 'qwen36-35b-a3b-q4kxl-ctx65k-v1prod-pp01-opencode-a',
   '16': 'qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-a',
+  // tier-32: same 9B as tier-16 at Q5_K_XL — adopted by extrapolation
+  // (decision §2.7); rows are serving validation only, never a comparative
+  // claim (§4). Wired for #011's functional smoke.
+  '32': 'qwen35-9b-q5kxl-ctx64k-v7noreppen-pp01-opencode-a',
 };
 
 // `opencode-a+prompt` plants claw's system-prompt.md as a committed AGENTS.md —
@@ -96,6 +100,7 @@ const OPENCODE_MODEL_CONFIG_ID_BY_TIER = {
 // which is harness-side provenance carried by config_id, not by model_config_id.
 const OPENCODE_PROMPT_MODEL_CONFIG_ID_BY_TIER = {
   '16': 'qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-prompt',
+  '32': 'qwen35-9b-q5kxl-ctx64k-v7noreppen-pp01-opencode-prompt',
 };
 
 /**

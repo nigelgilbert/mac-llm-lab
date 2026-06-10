@@ -519,6 +519,52 @@
     "tier_compatibility": [16],
     "notes": "**Config B (OpenCode) serving fingerprint for tier-16.** Same weights + sampler as the tier-16 production config `qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01` (Sprint 1.20) — `model_id` / `quantization` / `context_limit` / `sampler_config_id` are reused verbatim (model, engine, and thinking-mode are equalized across A/B); only the serving provenance differs. **B's serving (OPENCODE-HARNESS-AB-PLAN.md §4.5):** OpenCode → a second, OpenCode-dedicated `llama-server` on its own port, same GGUF, with the corrected Qwen3.5 Jinja chat template (no `claw.gbnf` grammar), native `<tool_call>` emission, and thinking-off via `--chat-template-kwargs enable_thinking=false` (NOT via a LiteLLM route — that is the A-side's mechanism; matches harness claw-16 thinking-off per issue #017 / docs/TIER16-THINKING-PARITY-DECISION.md — and because B has no `claw.gbnf` backstop, #018 MUST verify the closed think-block prefill via /apply-template). Pairs with `config_id=opencode-a` registry rows. A distinct `model_config_id` (vs reusing the production id) keeps every row self-documenting: reusing claw's id would falsely stamp B's rows with claw's litellm/grammar serving note."
   },
+  "qwen35-9b-q5kxl-ctx64k-v7noreppen-pp01-opencode-a": {
+    "model_config_id": "qwen35-9b-q5kxl-ctx64k-v7noreppen-pp01-opencode-a",
+    "model_id": "unsloth/Qwen3.5-9B-GGUF@UD-Q5_K_XL",
+    "model_family": "qwen3.5",
+    "parameter_count": 9000000000,
+    "quantization": "UD-Q5_K_XL",
+    "context_limit": 65536,
+    "runtime_backend": "llama-server@unknown",
+    "sampler_config_id": "v7-noreppen",
+    "sampler_settings": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.05,
+      "repeat_penalty": 1.0,
+      "presence_penalty": 0,
+      "seed_policy": "per_run"
+    },
+    "harness_version": "d0d46f4",
+    "prompt_pack_version": "pp01",
+    "tier_compatibility": [32],
+    "notes": "**OpenCode serving fingerprint for tier-32 (issue #011 / migration decision §2.7).** Same weights + sampler as the tier-32 production config `qwen35-9b-q5kxl-ctx64k-v7noreppen-pp01` (Sprint 1.19 B2) — `model_id` / `quantization` / `context_limit` / `sampler_config_id` reused verbatim; only the serving provenance differs: the OpenCode-dedicated llama-server on :11438 (OPENCODE_TIER=32, on-demand only — no launchd plist by design, decision §2.5), corrected Qwen3.5 Jinja template (qwen35-corrected.jinja, system-not-first fix), native tool_calls (no claw.gbnf — claw stack retired #008/#010, tag claw-stack-final), thinking-off via `--chat-template-kwargs enable_thinking=false` (closed <think></think> prefill verified via /apply-template per the #018 gotcha). Pairs with `config_id=opencode-a` (and the serving-identical `opencode-a+git`) registry rows. **SCOPE (decision §4): tier-32 carries NO comparative data — adopted by extrapolation from tier-16 (same 9B); rows under this fingerprint are serving validation only, not a comparative claim.**"
+  },
+  "qwen35-9b-q5kxl-ctx64k-v7noreppen-pp01-opencode-prompt": {
+    "model_config_id": "qwen35-9b-q5kxl-ctx64k-v7noreppen-pp01-opencode-prompt",
+    "model_id": "unsloth/Qwen3.5-9B-GGUF@UD-Q5_K_XL",
+    "model_family": "qwen3.5",
+    "parameter_count": 9000000000,
+    "quantization": "UD-Q5_K_XL",
+    "context_limit": 65536,
+    "runtime_backend": "llama-server@unknown",
+    "sampler_config_id": "v7-noreppen",
+    "sampler_settings": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.05,
+      "repeat_penalty": 1.0,
+      "presence_penalty": 0,
+      "seed_policy": "per_run"
+    },
+    "harness_version": "d0d46f4",
+    "prompt_pack_version": "pp01+agentsmd-v1",
+    "tier_compatibility": [32],
+    "notes": "**`+prompt` fingerprint for tier-32 (issue #011).** Serving is byte-identical to `qwen35-9b-q5kxl-ctx64k-v7noreppen-pp01-opencode-a` (same OpenCode-dedicated llama-server :11438, corrected Qwen3.5 Jinja template, native tool_calls, thinking-off); the ONLY delta is the prompt pack: `host/llama-server/docs/system-prompt.md` (tool-use discipline rules) planted VERBATIM as a git-committed `AGENTS.md` in /workspace before each run, which OpenCode injects via project-rules discovery (OPENCODE-SIDECAR-PORT-HANDOFF.md §4 — same mechanism as the tier-16 `+prompt` arm). Pairs with `config_id=opencode-a+prompt` rows. The git-init-only control arm `opencode-a+git` deliberately REUSES the plain `...-opencode-a` fingerprint. **SCOPE (decision §4): tier-32 carries NO comparative data — adopted by extrapolation from tier-16 (same 9B); rows under this fingerprint are serving validation only, not a comparative claim.**"
+  },
   "qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-prompt": {
     "model_config_id": "qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-prompt",
     "model_id": "unsloth/Qwen3.5-9B-GGUF@IQ4_XS",

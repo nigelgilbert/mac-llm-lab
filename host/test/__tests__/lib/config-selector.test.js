@@ -92,7 +92,23 @@ describe('modelConfigIdFor — per-tier Config-B fingerprint', () => {
       'qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-prompt',
     );
   });
-  it('opencode-a+prompt on an unmapped tier throws (only tier 16 is wired)', () => {
+
+  // Tier-32 (#011): same 9B as tier-16 at Q5_K_XL — serving-validation
+  // fingerprints only (decision §2.7/§4; no comparative claim).
+  it('opencode-a tier 32 → the t32 fingerprint', () => {
+    assert.equal(
+      modelConfigIdFor({ configId: 'opencode-a', tier: '32' }),
+      'qwen35-9b-q5kxl-ctx64k-v7noreppen-pp01-opencode-a',
+    );
+  });
+  it('opencode-a+prompt tier 32 → the dedicated t32 prompt fingerprint', () => {
+    assert.equal(
+      modelConfigIdFor({ configId: 'opencode-a+prompt', tier: 32 }), // numeric tier too
+      'qwen35-9b-q5kxl-ctx64k-v7noreppen-pp01-opencode-prompt',
+    );
+  });
+
+  it('opencode-a+prompt on an unmapped tier throws (only tiers 16/32 are wired)', () => {
     assert.throws(
       () => modelConfigIdFor({ configId: 'opencode-a+prompt', tier: '64' }),
       /No opencode-a\+prompt model_config_id/,
@@ -102,8 +118,9 @@ describe('modelConfigIdFor — per-tier Config-B fingerprint', () => {
   it('all mapped fingerprints exist in the committed manifest (drift guard)', () => {
     const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8'));
     const cells = [
-      ['opencode-a', '64'], ['opencode-a', '16'],
+      ['opencode-a', '64'], ['opencode-a', '16'], ['opencode-a', '32'],
       ['opencode-a+git', '16'], ['opencode-a+prompt', '16'],
+      ['opencode-a+git', '32'], ['opencode-a+prompt', '32'],
     ];
     for (const [configId, tier] of cells) {
       const id = modelConfigIdFor({ configId, tier });
