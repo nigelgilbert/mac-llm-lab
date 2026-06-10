@@ -61,6 +61,16 @@ PIDFILE="${OPENCODE_LLAMA_PIDFILE:-/tmp/opencode-llama-server${TAG}.pid}"
 NPREDICT="${OPENCODE_LLAMA_NPREDICT:-8192}"   # generous -n: avoid tool-call arg truncation
 HEALTH_TIMEOUT="${OPENCODE_LLAMA_HEALTH_TIMEOUT:-180}"  # model load (21 GB tier-64 slowest)
 
+# Optional grammar for the hybrid "opencode-a+grammar" ablation arm (post-#019).
+# When OPENCODE_USE_GRAMMAR points at a GBNF file it is added as a GLOBAL
+# --grammar-file ON TOP OF the native --jinja tool path. Unset (default) keeps the
+# boot byte-identical to the established opencode-a arm. NOTE: claw.gbnf was authored
+# for the CLAW path (grammar constrains raw text; LiteLLM/claw parse <tool_call>
+# downstream, NO --jinja) — composing it with llama.cpp's own --jinja tool_calls
+# parser is UNPROVEN. scripts/opencode-toolcall-probe.py is the go/no-go gate: it must
+# show tool_calls still parse (no raw <tool_call> leak into content) before any sweep.
+GRAMMAR_FILE="${OPENCODE_USE_GRAMMAR:-}"
+
 # launchd (optional, login-persistent path) — own label per tier
 LABEL="com.mac-llm-lab.opencode-server${TAG}"
 PLIST_TEMPLATE="$ROOT/launchd/$LABEL.plist"
@@ -84,6 +94,7 @@ preflight() {
   [[ -x "$BINARY" ]] || die "llama-server not found/executable: $BINARY"
   [[ -f "$GGUF"   ]] || die "tier-${TIER} GGUF not found: $GGUF (see models.conf)"
   [[ -f "$TEMPLATE" ]] || die "corrected template missing: $TEMPLATE (#004 tier-64 / #018 tier-16)"
+  [[ -z "$GRAMMAR_FILE" || -f "$GRAMMAR_FILE" ]] || die "OPENCODE_USE_GRAMMAR set but GBNF missing: $GRAMMAR_FILE"
   for v in CTX BATCH TEMP TOP_P TOP_K REPEAT_PENALTY PRESENCE_PENALTY; do
     [[ -n "${!v}" ]] || die "TIER_${TIER}_${v} not set in models.conf"
   done
@@ -111,6 +122,15 @@ cmd_start() {
   fi
 
   echo "starting opencode-server (tier-${TIER}, $(basename "$GGUF")) on :$PORT"
+  # Optional grammar splice for the hybrid "opencode-a+grammar" arm. Empty array
+  # unless OPENCODE_USE_GRAMMAR is set, so the default boot is unchanged. The
+  # ${arr[@]+"${arr[@]}"} guard at the call site makes the empty case bash-3.2-safe
+  # under `set -u` (macOS default bash is 3.2 — a bare "${arr[@]}" would abort).
+  local -a GRAMMAR_ARGS=()
+  if [[ -n "$GRAMMAR_FILE" ]]; then
+    GRAMMAR_ARGS=(--grammar-file "$GRAMMAR_FILE")
+    echo "  + grammar (hybrid arm): $GRAMMAR_FILE  [global --grammar-file ON TOP of --jinja]"
+  fi
   # NOTE: --chat-template-kwargs is deprecated-but-functional on build 5594d13
   # (warning only; --reasoning off is the startup-only alternative). Kept for
   # parity with the setup-guide recipe — see templates/README.md "Notes for #005".
@@ -123,6 +143,7 @@ cmd_start() {
     --temp "$TEMP" --top-p "$TOP_P" --top-k "$TOP_K" \
     --repeat-penalty "$REPEAT_PENALTY" --presence-penalty "$PRESENCE_PENALTY" \
     --repeat-last-n 256 \
+    ${GRAMMAR_ARGS[@]+"${GRAMMAR_ARGS[@]}"} \
     --jinja --chat-template-file "$TEMPLATE" \
     --chat-template-kwargs '{"enable_thinking":false}' \
     -n "$NPREDICT" \

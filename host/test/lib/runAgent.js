@@ -51,11 +51,13 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { fileURLToPath } from 'node:url';
+
 import { runClaw } from './claw.js';
 import { runOpenCode } from './opencode.js';
 import * as workspace from './workspace.js';
 import { clawModel } from './tier.js';
-import { resolveConfigId } from './config.js';
+import { resolveConfigId, isOpenCodeConfig } from './config.js';
 
 const DEFAULT_POST_SCRIPT_TIMEOUT_MS  = 5_000;
 const DEFAULT_PRECONDITION_TIMEOUT_MS = 5_000;
@@ -172,6 +174,17 @@ export async function runAgent({
       fs.writeFileSync(path.join(workspace.WORKSPACE, name), body);
     }
 
+    // Sidecar-port arms (OPENCODE-SIDECAR-PORT-HANDOFF.md §4): git-initialize
+    // the workspace AFTER the seed write (so the plant survives reset()) and
+    // BEFORE the runner sees it. Done for BOTH arms so the +prompt-vs-+git
+    // comparison isolates the prompt effect from the git-init confound.
+    {
+      const configId = resolveConfigId();
+      if (configId === 'opencode-a+git' || configId === 'opencode-a+prompt') {
+        seedWorkspaceGit({ plantAgentsMd: configId === 'opencode-a+prompt' });
+      }
+    }
+
     if (preconditionMustFail) {
       const pre = spawnSync('node', [path.join(workspace.WORKSPACE, preconditionMustFail)], {
         encoding: 'utf8',
@@ -264,6 +277,54 @@ export async function runAgent({
   }
 }
 
+// claw's tool-discipline system prompt, planted VERBATIM as AGENTS.md for the
+// `opencode-a+prompt` arm (an adapted prompt would be a different, non-comparable
+// treatment — handoff §6.4). Resolved relative to this file so it works in both
+// the baked test image and the path-matched docker:cli sibling (the repo is
+// mounted at its own absolute path there).
+const SYSTEM_PROMPT_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../llama-server/docs/system-prompt.md',
+);
+
+// Git-initialize /workspace (+ optionally plant AGENTS.md) for the sidecar-port
+// arms. OpenCode establishes its "project" via a git root: rules/instructions
+// discovery NO-OPS in a bare directory (handoff §2 — verified with a strong-model
+// AGENTS.md oracle; bare dir, instructions:[...] config, and a global mount all
+// failed; git init+commit injected). The verified-positive mechanism is a full
+// init+commit, so that is what we do — a bare `.git` dir is an untested shortcut.
+// Every step is FAIL-LOUD: a silent git failure here would re-create the exact
+// null-arm FINDING 2 caught (treatment label on rows whose prompt never injected),
+// which is worse than no data. The pass oracle is blind to `.git`/`AGENTS.md`
+// (it only runs the post-script), so the plant cannot affect pass/fail.
+function seedWorkspaceGit({ plantAgentsMd }) {
+  const cwd = workspace.WORKSPACE;
+  if (plantAgentsMd) {
+    fs.writeFileSync(
+      path.join(cwd, 'AGENTS.md'),
+      fs.readFileSync(SYSTEM_PROMPT_PATH, 'utf8'),
+    );
+  }
+  const steps = [
+    ['init', '-q'],
+    ['add', '-A'],
+    ['-c', 'user.email=harness@mac-llm-lab.invalid', '-c', 'user.name=tier-eval-harness',
+      'commit', '-q', '--allow-empty', '-m', 'tier-eval workspace seed'],
+  ];
+  for (const args of steps) {
+    const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
+    if (r.error || r.status !== 0) {
+      throw new Error(
+        `seedWorkspaceGit: \`git ${args.join(' ')}\` failed in ${cwd} ` +
+        `(status=${r.status}${r.error ? `, error=${r.error.message}` : ''}): ` +
+        `${(r.stderr || '').slice(0, 400)} — the ${plantAgentsMd ? 'opencode-a+prompt' : 'opencode-a+git'} ` +
+        'arm REQUIRES a git-rooted workspace (OpenCode rules discovery no-ops without it); ' +
+        'in the Phase B docker:cli sibling, `git` must be in the apk add list (run-config-ab.sh).',
+      );
+    }
+  }
+}
+
 // Resolve the active runner from the process-level CONFIG selector (issue #011).
 // Exported so the workspace round-trip script and unit tests exercise the SAME
 // selection logic defaultRunner uses, rather than a parallel reimplementation.
@@ -279,11 +340,12 @@ export async function runAgent({
 // writes, so we fail loud rather than silently false-fail every cell. See
 // host/test/docs/OPENCODE-WORKSPACE-CONTRACT.md.
 export function selectRunner(env = process.env) {
-  if (resolveConfigId(env) === 'opencode-a') {
+  const configId = resolveConfigId(env);
+  if (isOpenCodeConfig(configId)) {
     const workspaceDir = env.HOST_WORKSPACE;
     if (!workspaceDir) {
       throw new Error(
-        'CONFIG=opencode-a requires HOST_WORKSPACE — the host path backing the ' +
+        `CONFIG=${configId} requires HOST_WORKSPACE — the host path backing the ` +
         "test container's /workspace bind mount (set by the #013 driver). Without " +
         'it the opencode sibling container would mount a different host dir and the ' +
         'workspace oracle would never see the agent\'s writes. See ' +

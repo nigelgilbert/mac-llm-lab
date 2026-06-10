@@ -45,6 +45,10 @@
 #   SMOKE_TESTS        space-separated tier-eval test_id stems   (default: deep-equal)
 #   CONFIG_AB_REPEATS  runs per cell per phase (→ N per bucket)  (default: 1)
 #   TIER               hardware tier                             (default: 64)
+#   OC_CONFIGS         space-separated OpenCode CONFIG ids to run (default: opencode-a)
+#                      as sequential Phase B sub-phases against the same registry.
+#                      Sidecar-port arms (OPENCODE-SIDECAR-PORT-HANDOFF.md §4):
+#                      OC_CONFIGS="opencode-a+git opencode-a+prompt"
 #   CLAW_MODEL_CONFIG_ID   claw side model_config_id  (default: tier-64 v1-prod prod id)
 #   PER_TEST_TIMEOUT   per-cell wallclock ceiling, seconds       (default: 600)
 #   PHASE_SWAP         1 = launchd headroom swap (HITL)          (default: 0)
@@ -64,6 +68,7 @@ TIER="${TIER:-64}"
 CLAW_MODEL_CONFIG_ID="${CLAW_MODEL_CONFIG_ID:-qwen36-35b-a3b-q4kxl-ctx65k-v1prod-pp01}"
 PER_TEST_TIMEOUT="${PER_TEST_TIMEOUT:-600}"
 PHASE_SWAP="${PHASE_SWAP:-0}"
+OC_CONFIGS="${OC_CONFIGS:-opencode-a}"
 # SKIP_PHASE_A=1 (#019): reuse an existing registry's claw-rig rows and run ONLY
 # Phase B (opencode-a), appending to that same file, then gate. For re-running a
 # botched Phase B (e.g. the #019 oc-16 :11437 port wiring bug) without re-burning a
@@ -257,10 +262,10 @@ log "[A] claw phase exit rc=$A_RC (cell failures are tolerated; rows still emitt
 fi
 
 # ============================================================================
-# Phase B — opencode-a
+# Phase B — OpenCode arm(s): one sub-phase per OC_CONFIGS entry
 # ============================================================================
 log ""
-log "==> Phase B: opencode-a (CONFIG=opencode-a, oc llama-server :$OC_PORT)"
+log "==> Phase B: OpenCode arms [$OC_CONFIGS] (oc llama-server :$OC_PORT)"
 
 if [ "$PHASE_SWAP" = 1 ]; then
   log "[B] PHASE_SWAP: bringing claw launchd DOWN (headroom mode, HITL)..."
@@ -296,18 +301,23 @@ log "[B] shared workspace H = $H"
 # extended to run the tier-eval suite with the registry reporter wired and
 # RUN_REGISTRY_EMIT=1 so each cell emits a config_id-stamped row. We replicate
 # entrypoint.sh's per-cell loop inline (no claw alias table needed on this side).
+# One sub-phase per OC_CONFIGS entry, all appending to the same registry; the
+# sidecar-port arms (opencode-a+git / opencode-a+prompt) git-init the workspace
+# per-cell inside runAgent.js, which is why `git` is in the apk add below.
 #
 # RUN_REGISTRY_TESTS_DIR is overridden to the path-matched tests dir (the default
 # /test/... only exists in the baked test image). RUN_REGISTRY_MODEL_CONFIG_ID is
-# deliberately UNSET so maybeEmitRegistryRow auto-picks the tier's opencode-a
+# deliberately UNSET so maybeEmitRegistryRow auto-picks the tier's per-config
 # fingerprint via modelConfigIdFor(); an explicit value would defeat that.
-log "[B] running smoke under opencode (filter: $FILTER)"
+B_RC=0
+for OC_CONFIG in $OC_CONFIGS; do
+log "[B] running smoke under $OC_CONFIG (filter: $FILTER)"
 set +e
 docker run --rm \
   -v "$REPO_DIR:$REPO_DIR" -w "$REPO_DIR/host/test" \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$H:/workspace" \
-  -e CONFIG=opencode-a \
+  -e CONFIG="$OC_CONFIG" \
   -e HOST_WORKSPACE="$H" \
   -e TIER="$TIER" \
   -e OPENCODE_CONFIG_JSON="$OC_CONFIG_JSON" \
@@ -321,8 +331,8 @@ docker run --rm \
   -e GIT_SHA="$GIT_SHA" \
   --entrypoint sh "$DOCKER_CLI_IMAGE" -c '
     set -u
-    apk add --no-cache nodejs docker-cli-compose coreutils >/dev/null 2>&1 \
-      || { echo "FATAL: apk add (nodejs/docker-cli-compose/coreutils) failed — no network?" >&2; exit 3; }
+    apk add --no-cache nodejs docker-cli-compose coreutils git >/dev/null 2>&1 \
+      || { echo "FATAL: apk add (nodejs/docker-cli-compose/coreutils/git) failed — no network?" >&2; exit 3; }
     # Fail fast + loud if the shared workspace bind mount did not land — otherwise
     # every cell false-fails deep inside reset() with a cryptic ENOENT. A green
     # here means HOST_WORKSPACE crossed the container boundary (mount contract).
@@ -332,7 +342,7 @@ docker run --rm \
     fi
     rc=0
     for stem in $TIER_EVAL_FILTER; do
-      echo ">>> opencode cell: $stem (cap ${PER_TEST_TIMEOUT}s)"
+      echo ">>> $CONFIG cell: $stem (cap ${PER_TEST_TIMEOUT}s)"
       timeout --signal=TERM --kill-after=20s "${PER_TEST_TIMEOUT}s" \
         node --test --test-concurrency=1 \
           --test-reporter=spec --test-reporter-destination=stdout \
@@ -343,9 +353,12 @@ docker run --rm \
     done
     exit $rc
   '
-B_RC=$?
+SUB_RC=$?
 set -e
-log "[B] opencode phase exit rc=$B_RC (cell failures are tolerated; rows still emitted)"
+[ "$SUB_RC" -ne 0 ] && B_RC=1
+log "[B] $OC_CONFIG sub-phase exit rc=$SUB_RC (cell failures are tolerated; rows still emitted)"
+done
+log "[B] opencode phase exit rc=$B_RC"
 
 # ============================================================================
 # Gate — both sides bucketed, every row config_id-stamped
@@ -357,12 +370,21 @@ if [ ! -s "$HOST_REG" ]; then
 fi
 
 # Run the gate inside the test image (has node), against the LIVE registry + libs
-# via a path-matched mount.
+# via a path-matched mount. One gate run per OpenCode arm (--treatment): with
+# >2 configs in one registry the default treatment (opencode-a) would bucket
+# zero rows for a sidecar-port-only sweep and falsely fail.
+GATE_RC=0
+set +e
+for OC_CONFIG in $OC_CONFIGS; do
+log "[gate] treatment=$OC_CONFIG vs baseline=claw-rig"
 docker run --rm \
   -v "$REPO_DIR:$REPO_DIR" -w "$REPO_DIR/host/test" \
   --entrypoint node "$TEST_IMAGE" \
-  scripts/config-ab-pairing-check.mjs "$HOST_REG" --tier "$TIER"
-GATE_RC=$?
+  scripts/config-ab-pairing-check.mjs "$HOST_REG" --tier "$TIER" --treatment "$OC_CONFIG"
+SUB_RC=$?
+[ "$SUB_RC" -ne 0 ] && GATE_RC=1
+done
+set -e
 
 log ""
 log "==> Done. registry: $HOST_REG   (phaseA rc=$A_RC, phaseB rc=$B_RC, gate rc=$GATE_RC)"

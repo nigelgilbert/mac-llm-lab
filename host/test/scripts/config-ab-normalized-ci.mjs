@@ -21,23 +21,24 @@
 //
 // Usage:
 //   node scripts/config-ab-normalized-ci.mjs <registry.jsonl> --tier 16 [--seed 0xc0ffee] [--B 10000]
+//       [--treatment opencode-a] [--baseline claw-rig]
 //
 // Exit codes: 0 on a successful render; 2 = bad args.
 
 import { readRegistry } from '../lib/registry.js';
 import { pairedBootstrapCI } from '../lib/paired_bootstrap.js';
 
-const TREATMENT = 'opencode-a';
-const BASELINE = 'claw-rig';
 const MARGIN_PP = 5;
 
 function parseArgs(argv) {
   const a = argv.slice(2);
-  const opts = { seed: 0xc0ffee, B: 10000 };
+  const opts = { seed: 0xc0ffee, B: 10000, treatment: 'opencode-a', baseline: 'claw-rig' };
   for (let i = 0; i < a.length; i++) {
     if (a[i] === '--tier') opts.tier = Number.parseInt(a[++i], 10);
     else if (a[i] === '--seed') opts.seed = Number(a[++i]);
     else if (a[i] === '--B') opts.B = Number.parseInt(a[++i], 10);
+    else if (a[i] === '--treatment') opts.treatment = a[++i];
+    else if (a[i] === '--baseline') opts.baseline = a[++i];
     else if (!opts.registryPath) opts.registryPath = a[i];
     else { console.error(`unexpected arg: ${a[i]}`); process.exit(2); }
   }
@@ -49,7 +50,7 @@ function parseArgs(argv) {
 }
 
 function main() {
-  const { registryPath, tier, seed, B } = parseArgs(process.argv);
+  const { registryPath, tier, seed, B, treatment: TREATMENT, baseline: BASELINE } = parseArgs(process.argv);
   const all = readRegistry({ registryPath });
   const rows = tier == null ? all : all.filter((r) => r.hardware_tier === tier);
 

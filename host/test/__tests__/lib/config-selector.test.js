@@ -44,11 +44,15 @@ describe('resolveConfigId — one env, defaults to claw-rig', () => {
   it('opencode-a → opencode-a', () => {
     assert.equal(resolveConfigId({ CONFIG: 'opencode-a' }), 'opencode-a');
   });
+  it('sidecar-port arms resolve to themselves', () => {
+    assert.equal(resolveConfigId({ CONFIG: 'opencode-a+git' }), 'opencode-a+git');
+    assert.equal(resolveConfigId({ CONFIG: 'opencode-a+prompt' }), 'opencode-a+prompt');
+  });
   it('unrecognized value throws (fail loud, never silently mislabel)', () => {
     assert.throws(() => resolveConfigId({ CONFIG: 'opencode' }), /not a recognized config/);
   });
   it('VALID_CONFIGS matches the registry pairing enum', () => {
-    assert.deepEqual(VALID_CONFIGS, ['claw-rig', 'opencode-a']);
+    assert.deepEqual(VALID_CONFIGS, ['claw-rig', 'opencode-a', 'opencode-a+git', 'opencode-a+prompt']);
   });
 });
 
@@ -72,11 +76,38 @@ describe('modelConfigIdFor — per-tier Config-B fingerprint', () => {
     assert.throws(() => modelConfigIdFor({ configId: 'opencode-a', tier: '99' }), /No opencode-a model_config_id/);
   });
 
-  it('both mapped fingerprints exist in the committed manifest (drift guard)', () => {
+  // Sidecar-port arms (OPENCODE-SIDECAR-PORT-HANDOFF.md §4): +git is serving-
+  // identical to opencode-a (git-init is harness-side provenance, carried by
+  // config_id), so it reuses the tier's opencode-a fingerprint; +prompt changes
+  // the prompt pack (AGENTS.md plant) and gets its own fingerprint.
+  it('opencode-a+git reuses the tier fingerprint of opencode-a', () => {
+    assert.equal(
+      modelConfigIdFor({ configId: 'opencode-a+git', tier: '16' }),
+      'qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-a',
+    );
+  });
+  it('opencode-a+prompt tier 16 → the dedicated prompt fingerprint', () => {
+    assert.equal(
+      modelConfigIdFor({ configId: 'opencode-a+prompt', tier: '16' }),
+      'qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-prompt',
+    );
+  });
+  it('opencode-a+prompt on an unmapped tier throws (only tier 16 is wired)', () => {
+    assert.throws(
+      () => modelConfigIdFor({ configId: 'opencode-a+prompt', tier: '64' }),
+      /No opencode-a\+prompt model_config_id/,
+    );
+  });
+
+  it('all mapped fingerprints exist in the committed manifest (drift guard)', () => {
     const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8'));
-    for (const tier of ['64', '16']) {
-      const id = modelConfigIdFor({ configId: 'opencode-a', tier });
-      assert.ok(manifest[id], `manifest is missing opencode-a entry ${id} for tier ${tier}`);
+    const cells = [
+      ['opencode-a', '64'], ['opencode-a', '16'],
+      ['opencode-a+git', '16'], ['opencode-a+prompt', '16'],
+    ];
+    for (const [configId, tier] of cells) {
+      const id = modelConfigIdFor({ configId, tier });
+      assert.ok(manifest[id], `manifest is missing ${configId} entry ${id} for tier ${tier}`);
       assert.equal(manifest[id].model_config_id, id, `manifest[${id}].model_config_id mismatch`);
     }
   });
@@ -98,6 +129,14 @@ describe('selectRunner — CONFIG routes the default runner', () => {
   it('opencode-a WITH HOST_WORKSPACE returns a runner (selection succeeds)', () => {
     const run = selectRunner({ CONFIG: 'opencode-a', HOST_WORKSPACE: makeTmp('hw-') });
     assert.equal(typeof run, 'function');
+  });
+
+  it('sidecar-port arms route to the opencode branch (HOST_WORKSPACE demanded)', () => {
+    for (const CONFIG of ['opencode-a+git', 'opencode-a+prompt']) {
+      assert.throws(() => selectRunner({ CONFIG }), /HOST_WORKSPACE/);
+      const run = selectRunner({ CONFIG, HOST_WORKSPACE: makeTmp('hw-') });
+      assert.equal(typeof run, 'function');
+    }
   });
 
   // The HOST_WORKSPACE demand above is the deterministic, daemon-free proof that

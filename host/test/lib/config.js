@@ -8,9 +8,20 @@
 // per-file CONFIG branching) and a row's serving bundle can never disagree with
 // the runner that produced it.
 //
-//   CONFIG unset | ''   → 'claw-rig'   (default; current behavior preserved)
-//   CONFIG=claw-rig     → 'claw-rig'
-//   CONFIG=opencode-a   → 'opencode-a'
+//   CONFIG unset | ''        → 'claw-rig'   (default; current behavior preserved)
+//   CONFIG=claw-rig          → 'claw-rig'
+//   CONFIG=opencode-a        → 'opencode-a'
+//   CONFIG=opencode-a+git    → 'opencode-a+git'    (sidecar-port A/B control arm)
+//   CONFIG=opencode-a+prompt → 'opencode-a+prompt' (sidecar-port A/B treatment arm)
+//
+// The `opencode-a+git` / `opencode-a+prompt` pair is the tier-16 sidecar-port
+// experiment (OPENCODE-SIDECAR-PORT-HANDOFF.md §4): both get a git-initialized
+// /workspace (OpenCode's rules discovery no-ops in a bare dir — handoff §2);
+// `+prompt` additionally plants claw's system-prompt.md verbatim as AGENTS.md.
+// Two arms because `git init` alone may change OpenCode behavior (snapshots/
+// diffs) — comparing +prompt against +git isolates the *prompt* effect from the
+// git-init confound. The original `opencode-a` stays byte-identical (bare
+// workspace) so prior rows keep their meaning.
 //
 // The accepted values are exactly the `config_id` enum the registry already
 // pairs on (lib/run_row.js default 'claw-rig'; paired_bootstrap treatment
@@ -21,7 +32,18 @@
 // be a shared leaf dependency of all three without an import cycle.
 
 /** The accepted CONFIG / config_id values (the registry's coarse bundle enum). */
-export const VALID_CONFIGS = ['claw-rig', 'opencode-a'];
+export const VALID_CONFIGS = ['claw-rig', 'opencode-a', 'opencode-a+git', 'opencode-a+prompt'];
+
+/** Every config that routes to the OpenCode runner (vs the claw rig). */
+export const OPENCODE_CONFIGS = ['opencode-a', 'opencode-a+git', 'opencode-a+prompt'];
+
+/**
+ * True iff this config_id runs under the OpenCode harness (any arm).
+ * @param {string} configId
+ */
+export function isOpenCodeConfig(configId) {
+  return OPENCODE_CONFIGS.includes(configId);
+}
 
 /**
  * Resolve the active `config_id` from the process env. Unset/empty defaults to
@@ -29,7 +51,7 @@ export const VALID_CONFIGS = ['claw-rig', 'opencode-a'];
  * value — fail loud rather than silently mislabel rows or pick the wrong runner.
  *
  * @param {NodeJS.ProcessEnv} [env=process.env]
- * @returns {'claw-rig'|'opencode-a'}
+ * @returns {'claw-rig'|'opencode-a'|'opencode-a+git'|'opencode-a+prompt'}
  */
 export function resolveConfigId(env = process.env) {
   const raw = env.CONFIG;
@@ -56,26 +78,39 @@ const OPENCODE_MODEL_CONFIG_ID_BY_TIER = {
   '16': 'qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-a',
 };
 
+// `opencode-a+prompt` plants claw's system-prompt.md as a committed AGENTS.md —
+// that is a *prompt-pack* change, so it gets its own serving fingerprint.
+// `opencode-a+git` is deliberately ABSENT here and falls through to the tier's
+// plain opencode-a fingerprint: its serving (server, template, sampler, prompt
+// pack) is byte-identical to opencode-a — only the workspace is git-initialized,
+// which is harness-side provenance carried by config_id, not by model_config_id.
+const OPENCODE_PROMPT_MODEL_CONFIG_ID_BY_TIER = {
+  '16': 'qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-prompt',
+};
+
 /**
  * The OpenCode (Config B) model_config_id for a given tier. Returns `undefined`
  * for the claw side (claw's production model_config_id varies per sampler sweep
  * and is always supplied explicitly via RUN_REGISTRY_MODEL_CONFIG_ID, so there
- * is nothing to auto-pick). Throws for an opencode-a request on an unknown tier
+ * is nothing to auto-pick). Throws for an opencode request on an unknown tier
  * rather than emit a row against a non-existent manifest entry.
  *
  * @param {Object} o
- * @param {'claw-rig'|'opencode-a'} o.configId
+ * @param {'claw-rig'|'opencode-a'|'opencode-a+git'|'opencode-a+prompt'} o.configId
  * @param {string|number} o.tier   Hardware tier (e.g. '64' | '16').
  * @returns {string|undefined}
  */
 export function modelConfigIdFor({ configId, tier } = {}) {
-  if (configId !== 'opencode-a') return undefined;
+  if (!isOpenCodeConfig(configId)) return undefined;
   const key = String(tier);
-  const id = OPENCODE_MODEL_CONFIG_ID_BY_TIER[key];
+  const map = configId === 'opencode-a+prompt'
+    ? OPENCODE_PROMPT_MODEL_CONFIG_ID_BY_TIER
+    : OPENCODE_MODEL_CONFIG_ID_BY_TIER;
+  const id = map[key];
   if (!id) {
     throw new Error(
-      `No opencode-a model_config_id mapped for tier "${tier}"; known tiers: ` +
-      `${Object.keys(OPENCODE_MODEL_CONFIG_ID_BY_TIER).join(', ')}.`,
+      `No ${configId} model_config_id mapped for tier "${tier}"; known tiers: ` +
+      `${Object.keys(map).join(', ')}.`,
     );
   }
   return id;

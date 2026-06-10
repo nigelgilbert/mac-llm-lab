@@ -64,9 +64,11 @@
       "type": "string",
       "enum": [
         "claw-rig",
-        "opencode-a"
+        "opencode-a",
+        "opencode-a+git",
+        "opencode-a+prompt"
       ],
-      "description": "Coarse bundle label grouping rows by serving/harness stack before any data is collected (OPENCODE-HARNESS-AB-PLAN.md §4.5). `claw-rig` is the established claw + llama-server stack; `opencode-a` is the opencode harness bundle. Complementary to — not a replacement for — `model_config_id`, which is the fine-grained serving fingerprint."
+      "description": "Coarse bundle label grouping rows by serving/harness stack before any data is collected (OPENCODE-HARNESS-AB-PLAN.md §4.5). `claw-rig` is the established claw + llama-server stack; `opencode-a` is the opencode harness bundle (bare workspace). `opencode-a+git` / `opencode-a+prompt` are the tier-16 sidecar-port arms (OPENCODE-SIDECAR-PORT-HANDOFF.md §4): both git-initialize /workspace (OpenCode rules discovery no-ops in a bare dir); `+prompt` additionally plants claw's system-prompt.md as a committed AGENTS.md. Complementary to — not a replacement for — `model_config_id`, which is the fine-grained serving fingerprint."
     },
     "model_config_id": {
       "type": "string",

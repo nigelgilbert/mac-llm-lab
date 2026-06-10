@@ -20,6 +20,12 @@
 //
 // Usage:
 //   node scripts/config-ab-verdict.mjs <registry.jsonl> [--tier 64] [--seed 0xc0ffee] [--B 10000]
+//       [--treatment opencode-a] [--baseline claw-rig]
+//
+// --treatment/--baseline (default opencode-a vs claw-rig) let the same renderer
+// score the sidecar-port arms (e.g. --treatment opencode-a+prompt --baseline
+// opencode-a+git isolates the AGENTS.md prompt effect from the git-init
+// confound). Both must be VALID_CONFIGS members.
 //
 // Exit codes: 0 always on a successful render (the verdict — retire/keep — is in
 // the output, not the exit code; this is a reporter, not a gate). 2 = bad args.
@@ -35,21 +41,31 @@ import { VALID_CONFIGS } from '../lib/config.js';
 
 const MARGIN_PP = 5; // §0a non-inferiority margin
 const SPEED_MULT = 1.5; // §0a.2 wall-clock ceiling
-const TREATMENT = 'opencode-a';
-const BASELINE = 'claw-rig';
 
 function parseArgs(argv) {
   const a = argv.slice(2);
-  const opts = { seed: 0xc0ffee, B: 10000 };
+  const opts = { seed: 0xc0ffee, B: 10000, treatment: 'opencode-a', baseline: 'claw-rig' };
   for (let i = 0; i < a.length; i++) {
     if (a[i] === '--tier') opts.tier = Number.parseInt(a[++i], 10);
     else if (a[i] === '--seed') opts.seed = Number(a[++i]);
     else if (a[i] === '--B') opts.B = Number.parseInt(a[++i], 10);
+    else if (a[i] === '--treatment') opts.treatment = a[++i];
+    else if (a[i] === '--baseline') opts.baseline = a[++i];
     else if (!opts.registryPath) opts.registryPath = a[i];
     else { console.error(`unexpected arg: ${a[i]}`); process.exit(2); }
   }
   if (!opts.registryPath) {
-    console.error('usage: config-ab-verdict.mjs <registry.jsonl> [--tier 64] [--seed N] [--B N]');
+    console.error('usage: config-ab-verdict.mjs <registry.jsonl> [--tier 64] [--seed N] [--B N] [--treatment ID] [--baseline ID]');
+    process.exit(2);
+  }
+  for (const side of ['treatment', 'baseline']) {
+    if (!VALID_CONFIGS.includes(opts[side])) {
+      console.error(`--${side} "${opts[side]}" is not in VALID_CONFIGS {${VALID_CONFIGS.join(', ')}}`);
+      process.exit(2);
+    }
+  }
+  if (opts.treatment === opts.baseline) {
+    console.error('--treatment and --baseline must differ');
     process.exit(2);
   }
   return opts;
@@ -75,7 +91,7 @@ function pctile(xs, q) {
 }
 
 function main() {
-  const { registryPath, tier, seed, B } = parseArgs(process.argv);
+  const { registryPath, tier, seed, B, treatment: TREATMENT, baseline: BASELINE } = parseArgs(process.argv);
   const all = readRegistry({ registryPath });
   const rows = tier == null ? all : all.filter((r) => r.hardware_tier === tier);
 
@@ -83,10 +99,11 @@ function main() {
   console.log(`registry : ${registryPath}`);
   console.log(`rows     : ${all.length}${tier != null ? `  (tier ${tier}: ${rows.length})` : ''}`);
   console.log(`bootstrap: B=${B}  seed=0x${(seed >>> 0).toString(16)}`);
+  console.log(`arms     : treatment=${TREATMENT}  baseline=${BASELINE}`);
 
   // --- Provenance per side (one line each, distinct serving fingerprint) -----
   console.log('\n--- Provenance (model_config_id | model | quant | ctx | sampler | prompt_pack | harness) ---');
-  for (const cid of VALID_CONFIGS) {
+  for (const cid of [BASELINE, TREATMENT]) {
     const fps = new Set(
       rows
         .filter((r) => r.config_id === cid)
@@ -126,7 +143,7 @@ function main() {
 
   console.log('\n--- Rule 0a.1: pass-rate non-inferiority ---');
   console.log(`  paired tasks       : ${ci.nTasks}`);
-  console.log(`  aggregate delta    : ${deltaPp >= 0 ? '+' : ''}${deltaPp.toFixed(1)}pp  (opencode-a − claw-rig)`);
+  console.log(`  aggregate delta    : ${deltaPp >= 0 ? '+' : ''}${deltaPp.toFixed(1)}pp  (${TREATMENT} − ${BASELINE})`);
   console.log(`  90% paired-bootstrap CI: [${lowerPp.toFixed(1)}, ${upperPp.toFixed(1)}]pp`);
   console.log(`  worst per-task delta: ${(minDelta * 100 >= 0 ? '+' : '')}${(minDelta * 100).toFixed(1)}pp   best: +${(maxDelta * 100).toFixed(1)}pp (${maxTask?.test_id})`);
   console.log(`  margin             : CI lower ${lowerPp.toFixed(1)}pp ${rule1 ? '>' : '≤'} −${MARGIN_PP}pp  →  ${rule1 ? 'MET' : 'NOT MET'}`);
@@ -147,7 +164,7 @@ function main() {
   }
   const ratio = median(stats[TREATMENT].durAll) / median(stats[BASELINE].durAll);
   const rule2 = ratio <= SPEED_MULT;
-  console.log(`  ratio (oc median / claw median): ${ratio.toFixed(2)}×  ${rule2 ? '≤' : '>'} ${SPEED_MULT}×  →  ${rule2 ? 'MET' : 'NOT MET'}`);
+  console.log(`  ratio (${TREATMENT} median / ${BASELINE} median): ${ratio.toFixed(2)}×  ${rule2 ? '≤' : '>'} ${SPEED_MULT}×  →  ${rule2 ? 'MET' : 'NOT MET'}`);
 
   // --- Iteration parity ------------------------------------------------------
   console.log('\n--- Iteration parity (iters_count) ---');
@@ -184,14 +201,24 @@ function main() {
   }
 
   // --- Verdict ---------------------------------------------------------------
+  // The §0a RETIRE/KEEP framing is only meaningful against the claw-rig
+  // baseline; for any other baseline (e.g. the opencode-a+git control) this is
+  // a mechanism comparison, so report non-inferiority/superiority instead.
   const retire = rule1 && rule2;
   console.log('\n=== VERDICT (tier-' + tier + ') ===');
   console.log(`  Rule 0a.1 (pass-rate non-inferiority): ${rule1 ? 'MET' : 'NOT MET'}`);
   console.log(`  Rule 0a.2 (wall-clock ≤ ${SPEED_MULT}×)       : ${rule2 ? 'MET' : 'NOT MET'}`);
-  console.log(
-    `  → ${retire ? 'RETIRE the claw rig at this tier' : 'KEEP the claw rig at this tier'}` +
-      (retire && superior ? ' (OpenCode is superior on pass-rate AND faster)' : ''),
-  );
+  if (BASELINE === 'claw-rig') {
+    console.log(
+      `  → ${retire ? 'RETIRE the claw rig at this tier' : 'KEEP the claw rig at this tier'}` +
+        (retire && superior ? ` (${TREATMENT} is superior on pass-rate AND faster)` : ''),
+    );
+  } else {
+    console.log(
+      `  → ${TREATMENT} is ${rule1 ? (superior ? 'SUPERIOR to' : 'non-inferior to') : 'INFERIOR to (rule 0a.1 margin)'} ` +
+        `${BASELINE} on pass-rate; wall-clock rule ${rule2 ? 'met' : 'NOT met'} (mechanism comparison, not a §0a retire decision)`,
+    );
+  }
 
   if (ci.warning) console.log(`\n  ⚠ ${ci.warning}`);
   process.exit(0);

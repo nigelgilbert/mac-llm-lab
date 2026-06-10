@@ -23,7 +23,12 @@
 // gate sees exactly what the report layer (#016) will.
 //
 // Usage:
-//   node scripts/config-ab-pairing-check.mjs <registry.jsonl> [--tier 64]
+//   node scripts/config-ab-pairing-check.mjs <registry.jsonl> [--tier 64] \
+//       [--treatment opencode-a] [--baseline claw-rig]
+//
+// --treatment/--baseline (defaults opencode-a / claw-rig) point invariant 2 at
+// a specific arm pair — needed once a registry holds more than two configs
+// (e.g. the sidecar-port arms opencode-a+git / opencode-a+prompt).
 //
 // Exit codes: 0 = both invariants hold; 1 = a row lacks/forges config_id, or a
 // config bucketed zero eligible runs, or no paired tasks. 2 = bad invocation.
@@ -37,18 +42,26 @@ function parseArgs(argv) {
   const opts = {};
   for (let i = 0; i < a.length; i++) {
     if (a[i] === '--tier') opts.tier = Number.parseInt(a[++i], 10);
+    else if (a[i] === '--treatment') opts.treatment = a[++i];
+    else if (a[i] === '--baseline') opts.baseline = a[++i];
     else if (!opts.registryPath) opts.registryPath = a[i];
     else { console.error(`unexpected arg: ${a[i]}`); process.exit(2); }
   }
   if (!opts.registryPath) {
-    console.error('usage: config-ab-pairing-check.mjs <registry.jsonl> [--tier 64]');
+    console.error('usage: config-ab-pairing-check.mjs <registry.jsonl> [--tier 64] [--treatment ID] [--baseline ID]');
     process.exit(2);
+  }
+  for (const side of ['treatment', 'baseline']) {
+    if (opts[side] != null && !VALID_CONFIGS.includes(opts[side])) {
+      console.error(`--${side} "${opts[side]}" is not in VALID_CONFIGS {${VALID_CONFIGS.join(', ')}}`);
+      process.exit(2);
+    }
   }
   return opts;
 }
 
 function main() {
-  const { registryPath, tier } = parseArgs(process.argv);
+  const { registryPath, tier, treatment: treatmentOpt, baseline: baselineOpt } = parseArgs(process.argv);
   const rows = readRegistry({ registryPath });
 
   console.log(`=== #013 paired-run gate ===`);
@@ -88,7 +101,7 @@ function main() {
   // --- Invariant 2: both sides bucket, claw baseline not dropped ------------
   // summarizeTasks gives the eligible-run counts per cell exactly as the
   // bootstrap (and the #016 report) will see them.
-  const { perTask, unpairedTasks, treatment, baseline } = summarizeTasks(rows, { tier });
+  const { perTask, unpairedTasks, treatment, baseline } = summarizeTasks(rows, { tier, treatment: treatmentOpt, baseline: baselineOpt });
 
   let baselineEligible = 0;
   let treatmentEligible = 0;
@@ -139,7 +152,7 @@ function main() {
   // point on live rows (degenerate CI at 1 task is fine — we assert bucketing,
   // not significance).
   try {
-    const ci = pairedBootstrapCI(rows, { tier });
+    const ci = pairedBootstrapCI(rows, { tier, treatment: treatmentOpt, baseline: baselineOpt });
     console.log(
       `\npaired_bootstrap: nTasks=${ci.nTasks}  aggregateDelta=${(ci.aggregateDelta * 100).toFixed(1)}pp  ` +
       `90% CI [${(ci.ci.lower * 100).toFixed(1)}, ${(ci.ci.upper * 100).toFixed(1)}]pp`,
