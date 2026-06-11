@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  numOrNull,
   serverTimingsEnabled,
   defaultServerLogPath,
   openServerLogCursor,
@@ -56,6 +57,26 @@ prompt eval time =      58.41 ms /     4 tokens (   14.60 ms per token,    68.49
       total time =    1243.99 ms /    46 tokens
 slot      release: id  0 | task 114 | stop processing: n_tokens = 70, truncated = 0
 `;
+
+describe('numOrNull — the ONE exported coercing numeric guard (#017)', () => {
+  it("coerces numeric strings (regex captures): '42' → 42", () => {
+    assert.equal(numOrNull('42'), 42);
+    assert.equal(numOrNull('132.30'), 132.3);
+  });
+  it("pins the Number() coercion edges: '' → 0, true → 1", () => {
+    // Documented footgun, never reachable from the regex-capture call sites
+    // ([\d.]+ never yields '' / true). The transcript's strictNumOrNull
+    // returns null for all three — deliberately divergent (#017).
+    assert.equal(numOrNull(''), 0);
+    assert.equal(numOrNull(true), 1);
+  });
+  it('still nulls out null/undefined/non-numeric', () => {
+    assert.equal(numOrNull(null), null);
+    assert.equal(numOrNull(undefined), null);
+    assert.equal(numOrNull('abc'), null);
+    assert.equal(numOrNull(NaN), null);
+  });
+});
 
 describe('serverTimingsEnabled — opt-in flag (issue #022)', () => {
   it('is disabled by default', () => {

@@ -13,10 +13,17 @@
 //        --runtime-root /workspace/.claw-runtime \
 //        --tests-dir   /test/__tests__/tier-eval \
 //        --ctx         /tmp/harvest-ctx.json \
+//        --config-id   opencode-a+prompt \
 //        --registry    /workspace/.claw-runtime/run_registry.jsonl \
 //        [--run-id <id>]              # harvest just one run
 //        [--since <ms>]               # filter by run_started_ms
 //        [--dry-run]                  # validate + report; do not append
+//
+// --config-id is REQUIRED (issue #009) and validated against lib/config.js's
+// VALID_CONFIGS. The sidecar cannot infer which A/B arm produced a run, and
+// assembleRow no longer defaults the label — so the operator must declare it
+// explicitly or the harvest exits nonzero. The flag is the single source of
+// the label; a conflicting `config_id` inside the --ctx JSON is an error.
 //
 // The --ctx JSON supplies the static fields that the sidecar can't infer:
 //   {
@@ -46,6 +53,7 @@ import path from 'node:path';
 import { emitRow, assembleRow } from '../lib/run_row.js';
 import { validateRow } from '../lib/registry.js';
 import { readManifest } from '../lib/test_manifest.js';
+import { VALID_CONFIGS } from '../lib/config.js';
 
 function readJsonIfExists(dir, fname) {
   const p = path.join(dir, fname);
@@ -61,6 +69,7 @@ function parseArgs(argv) {
     if (k === '--runtime-root') opts.runtimeRoot = a[++i];
     else if (k === '--tests-dir') opts.testsDir = a[++i];
     else if (k === '--ctx') opts.ctxPath = a[++i];
+    else if (k === '--config-id') opts.configId = a[++i];
     else if (k === '--registry') opts.registryPath = a[++i];
     else if (k === '--run-id') opts.runId = a[++i];
     else if (k === '--since') opts.sinceMs = Number.parseInt(a[++i], 10);
@@ -72,7 +81,9 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.error(`Usage: node harvest-runs-to-registry.mjs --runtime-root <dir> --tests-dir <dir> --ctx <ctx.json> [--registry <path>] [--run-id <id>] [--since <ms>] [--dry-run]`);
+  console.error(`Usage: node harvest-runs-to-registry.mjs --runtime-root <dir> --tests-dir <dir> --ctx <ctx.json> --config-id <id> [--registry <path>] [--run-id <id>] [--since <ms>] [--dry-run]`);
+  console.error(`  --config-id is required (issue #009): the coarse A/B bundle label stamped on every harvested row.`);
+  console.error(`  Valid values: ${VALID_CONFIGS.join(', ')}`);
 }
 
 function loadCtx(p) {
@@ -167,12 +178,36 @@ function main() {
   if (!opts.runtimeRoot) { console.error('--runtime-root required'); process.exit(2); }
   if (!opts.testsDir)    { console.error('--tests-dir required');    process.exit(2); }
   if (!opts.ctxPath)     { console.error('--ctx required');           process.exit(2); }
+  // Issue #009: the harvested arm must be declared explicitly — the sidecar
+  // cannot infer it and assembleRow no longer defaults to 'claw-rig'.
+  if (!opts.configId) {
+    console.error('--config-id required');
+    printHelp();
+    process.exit(2);
+  }
+  if (!VALID_CONFIGS.includes(opts.configId)) {
+    console.error(`--config-id "${opts.configId}" is not in VALID_CONFIGS {${VALID_CONFIGS.join(', ')}}`);
+    printHelp();
+    process.exit(2);
+  }
 
   const ctx = loadCtx(opts.ctxPath);
+  // The CLI flag is the single source of the bundle label. A different
+  // config_id buried in the ctx JSON would silently win/lose depending on
+  // spread order — refuse the ambiguity outright.
+  if (ctx.config_id !== undefined && ctx.config_id !== opts.configId) {
+    console.error(
+      `ctx file config_id "${ctx.config_id}" conflicts with --config-id "${opts.configId}"; `
+      + 'remove config_id from the ctx file (--config-id is the single source of the label).',
+    );
+    process.exit(2);
+  }
+  ctx.config_id = opts.configId;
   const testIdx = buildTestIndex(opts.testsDir);
   const runIds = listRunIds(opts.runtimeRoot, { runId: opts.runId, sinceMs: opts.sinceMs });
 
   console.log(`harvesting ${runIds.length} run(s) from ${opts.runtimeRoot}`);
+  console.log(`config_id: ${opts.configId} (stamped on every harvested row)`);
   console.log(`test_id index: ${Object.keys(testIdx).length} manifest(s) loaded from ${opts.testsDir}`);
 
   let ok = 0, skipped = 0, invalid = 0, appended = 0;

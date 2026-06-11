@@ -225,8 +225,14 @@ if [ "$(http "$OC_HEALTH")" = 200 ]; then
   log "==> oc-$TIER already green on :$OC_PORT — using as found (will not stop it)"
 else
   log "==> starting oc-$TIER server on :$OC_PORT..."
-  STARTED_OC=1   # set BEFORE start so a partial start is still cleaned up
   OPENCODE_TIER="$TIER" "$OC_SERVER" start || err "oc-$TIER server failed to reach green /health"
+  # Set ONLY after a start THIS driver performed succeeded (#005 defect 2):
+  # setting it before start meant a failed start (e.g. against another owner's
+  # mid-load server reached via the shared per-tier pidfile) made the cleanup
+  # trap stop a server this driver never started — violating stop-iff-I-
+  # started-it. On any start failure STARTED_OC stays 0 and cleanup leaves
+  # whatever is (or was coming) up on :$OC_PORT untouched.
+  STARTED_OC=1
 fi
 [ "$(http "$OC_HEALTH")" = 200 ] || err "oc-$TIER not green at $OC_HEALTH"
 

@@ -17,6 +17,7 @@ import {
   meetsNonInferiority,
   mulberry32,
   percentile,
+  isEligible,
   PairedBootstrapError,
 } from '../../lib/paired_bootstrap.js';
 
@@ -212,6 +213,28 @@ describe('paired-bootstrap CI library (issue #015)', () => {
   });
 
   describe('Layer-A eligibility', () => {
+    // isEligible is exported (issue #012) so the verdict renderer
+    // (scripts/config-ab-verdict.mjs) shares this exact predicate instead of
+    // carrying a private copy. Pin the public contract here.
+    it('exported isEligible accepts done/error/timeout rows with a boolean verdict', () => {
+      assert.equal(isEligible({ terminal_status: 'done', passed: true }), true);
+      assert.equal(isEligible({ terminal_status: 'done', passed: false }), true);
+      assert.equal(isEligible({ terminal_status: 'error', passed: false }), true);
+      assert.equal(isEligible({ terminal_status: 'timeout', passed: false }), true);
+    });
+
+    it('exported isEligible rejects harness_error/interrupted, non-boolean passed, and nullish rows', () => {
+      assert.equal(isEligible({ terminal_status: 'harness_error', passed: null }), false);
+      assert.equal(isEligible({ terminal_status: 'interrupted', passed: null }), false);
+      // even a (malformed) boolean verdict cannot rescue those statuses
+      assert.equal(isEligible({ terminal_status: 'harness_error', passed: false }), false);
+      assert.equal(isEligible({ terminal_status: 'interrupted', passed: true }), false);
+      assert.equal(isEligible({ terminal_status: 'done', passed: null }), false);
+      assert.equal(isEligible({ terminal_status: 'done' }), false);
+      assert.equal(isEligible(null), false);
+      assert.equal(isEligible(undefined), false);
+    });
+
     it('drops harness_error / interrupted (passed=null) rows from denominators', () => {
       const rows = [
         ...cell('e1', 'opencode-a', 8),

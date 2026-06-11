@@ -116,9 +116,9 @@ case=os.environ["CASE"]; expected=os.environ["EXPECTED"]
 try:
     d=json.loads(open(os.environ["RESP_FILE"]).read(), strict=False)
 except Exception as e:
-    print(f"  FAIL  not JSON: {e}\nVERDICT=FAIL\nARGS_TYPE=none\nSELECTED="); raise SystemExit
+    print(f"  FAIL  not JSON: {e}\nVERDICT=FAIL\nARGS_TYPE=none"); raise SystemExit
 if d.get("error") and not d.get("choices"):
-    print(f"  FAIL  server error: {json.dumps(d['error'])[:200]}\nVERDICT=FAIL\nARGS_TYPE=none\nSELECTED="); raise SystemExit
+    print(f"  FAIL  server error: {json.dumps(d['error'])[:200]}\nVERDICT=FAIL\nARGS_TYPE=none"); raise SystemExit
 ch=(d.get("choices") or [{}])[0]; msg=ch.get("message") or {}
 fr=ch.get("finish_reason"); tcs=msg.get("tool_calls") or []
 content=msg.get("content") or ""; reasoning=msg.get("reasoning_content") or ""
@@ -150,7 +150,6 @@ for n in notes:   print(f"      - {n}")
 for dd in details:print(f"      · {dd}")
 print(f"VERDICT={'PASS' if ok else 'FAIL'}")
 print(f"ARGS_TYPE={'string' if argtype=='str' else ('object' if argtype=='dict' else (argtype or 'none'))}")
-print(f"SELECTED={','.join(selected)}")
 PY
 }
 
@@ -194,7 +193,6 @@ print(f"  {'PASS' if ok else 'FAIL'}  (expected ~ {expected}; got: {','.join(nam
 for n in notes: print(f"      - {n}")
 print(f"VERDICT={'PASS' if ok else 'FAIL'}")
 print(f"ARGS_TYPE={argtype}")
-print(f"SELECTED={','.join(names)}")
 PY
 }
 
@@ -234,7 +232,7 @@ for mode in nonstream stream; do
       fi
       if [[ "$mode" == stream ]]; then out="$(assert_stream "$label" "$expected" "$tmpresp")"
       else                            out="$(assert_nonstream "$label" "$expected" "$tmpresp")"; fi
-      echo "$out" | grep -v '^VERDICT=\|^ARGS_TYPE=\|^SELECTED='
+      echo "$out" | grep -v '^VERDICT=\|^ARGS_TYPE='
       [[ "$(tok "$out" VERDICT)" == "PASS" ]] && passed=$((passed+1))
       ARGS_TYPES+=("$(tok "$out" ARGS_TYPE)")
     done
@@ -244,7 +242,10 @@ done
 echo
 echo "=============================================================================="
 echo " SUMMARY: $passed/$total runs emitted a parsed tool_calls[] with no XML leak"
-uniq_types="$(printf '%s\n' "${ARGS_TYPES[@]}" | sort -u | grep -v '^none$' | paste -sd, -)"
+# NB: ${ARGS_TYPES[@]+...} guards bash 3.2's set -u unbound-array trap (all-non-200
+# battery leaves the array empty); `|| true` guards pipefail when every run was 'none'
+# (grep -v matches nothing → exit 1) — either would otherwise kill the script mid-summary.
+uniq_types="$(printf '%s\n' ${ARGS_TYPES[@]+"${ARGS_TYPES[@]}"} | sort -u | { grep -v '^none$' || true; } | paste -sd, -)"
 echo " arguments type (build 5594d13, #20198): ${uniq_types:-unknown}  (STRING = OpenAI-strict, no shim)"
 echo "=============================================================================="
 echo

@@ -23,7 +23,7 @@
 # OpenCode's serving config:
 #   --jinja + the vendored corrected template (system-not-first fix)
 #       tier-64 → qwen36-corrected.jinja (#004); tier-16 → qwen35-corrected.jinja (#018)
-#   NO claw.gbnf grammar  (Config B uses native <tool_call> parsing)
+#   NO grammar file  (Config B uses native <tool_call> parsing)
 #   thinking-off via --chat-template-kwargs '{"enable_thinking":false}' (#017)
 #   per-tier sampler (mirrored from models.conf TIER_${TIER}_*)
 #   generous -n so tool-call args don't truncate
@@ -82,16 +82,13 @@ LOG="${OPENCODE_LLAMA_LOG:-/tmp/opencode-llama-server${TAG}.log}"
 PIDFILE="${OPENCODE_LLAMA_PIDFILE:-/tmp/opencode-llama-server${TAG}.pid}"
 NPREDICT="${OPENCODE_LLAMA_NPREDICT:-8192}"   # generous -n: avoid tool-call arg truncation
 HEALTH_TIMEOUT="${OPENCODE_LLAMA_HEALTH_TIMEOUT:-180}"  # model load (21 GB tier-64 slowest)
+STOP_TIMEOUT="${OPENCODE_LLAMA_STOP_TIMEOUT:-30}"  # SIGTERM grace before SIGKILL (multi-GB unload)
 
-# Optional grammar for the hybrid "opencode-a+grammar" ablation arm (post-#019).
-# When OPENCODE_USE_GRAMMAR points at a GBNF file it is added as a GLOBAL
-# --grammar-file ON TOP OF the native --jinja tool path. Unset (default) keeps the
-# boot byte-identical to the established opencode-a arm. NOTE: claw.gbnf was authored
-# for the CLAW path (grammar constrains raw text; LiteLLM/claw parse <tool_call>
-# downstream, NO --jinja) — composing it with llama.cpp's own --jinja tool_calls
-# parser is UNPROVEN. scripts/opencode-toolcall-probe.py is the go/no-go gate: it must
-# show tool_calls still parse (no raw <tool_call> leak into content) before any sweep.
-GRAMMAR_FILE="${OPENCODE_USE_GRAMMAR:-}"
+# The OPENCODE_USE_GRAMMAR knob (hybrid "opencode-a+grammar" ablation arm) was
+# REMOVED with the retired grammar arm (#005 cleanup): the GBNF it pointed at
+# was deleted with the claw stack (tag claw-stack-final), and the knob was
+# validated but never rendered into the launchd plists. Config B serves with
+# native --jinja <tool_call> parsing only — no grammar file, ever.
 
 # launchd (optional, login-persistent path) — own label per tier
 LABEL="com.mac-llm-lab.opencode-server${TAG}"
@@ -116,7 +113,6 @@ preflight() {
   [[ -x "$BINARY" ]] || die "llama-server not found/executable: $BINARY"
   [[ -f "$GGUF"   ]] || die "tier-${TIER} GGUF not found: $GGUF (see models.conf)"
   [[ -f "$TEMPLATE" ]] || die "corrected template missing: $TEMPLATE (#004 tier-64 / #018 tier-16)"
-  [[ -z "$GRAMMAR_FILE" || -f "$GRAMMAR_FILE" ]] || die "OPENCODE_USE_GRAMMAR set but GBNF missing: $GRAMMAR_FILE"
   for v in CTX BATCH TEMP TOP_P TOP_K REPEAT_PENALTY PRESENCE_PENALTY; do
     [[ -n "${!v}" ]] || die "TIER_${TIER}_${v} not set in models.conf"
   done
@@ -160,23 +156,26 @@ wait_green() {
 # extended with the per-tier sampler, thinking-off kwarg, and generous -n.
 cmd_start() {
   preflight
-  if running_pid >/dev/null; then
-    echo "already running (pid $(running_pid)) on :$PORT"; cmd_health; return 0
+  local pid
+  if pid="$(running_pid)"; then
+    # Already running (pidfile live). A still-loading server is NOT an error:
+    # wait for green exactly like the fresh-boot path does, instead of letting
+    # cmd_health exit 1 on a red-but-loading /health (#005 defect 1).
+    echo "already running (pid $pid) on :$PORT"
+    if is_green; then echo "  /health green on :$PORT"; return 0; fi
+    echo "  /health not green yet — waiting up to ${HEALTH_TIMEOUT}s for model load"
+    local rc=0; wait_green "$pid" || rc=$?
+    case "$rc" in
+      0) echo "  /health green on :$PORT"; return 0 ;;
+      2) rm -f "$PIDFILE"; exit 2 ;;
+      *) die "running server (pid $pid) did not reach green /health within ${HEALTH_TIMEOUT}s; log tail: $(tail -5 "$LOG")" ;;
+    esac
   fi
   if lsof -nP -iTCP:"$PORT" 2>/dev/null | grep -q LISTEN; then
     die "port $PORT already in use (refusing to touch it — is claw on the wrong port?)"
   fi
 
   echo "starting opencode-server (tier-${TIER}, $(basename "$GGUF")) on :$PORT"
-  # Optional grammar splice for the hybrid "opencode-a+grammar" arm. Empty array
-  # unless OPENCODE_USE_GRAMMAR is set, so the default boot is unchanged. The
-  # ${arr[@]+"${arr[@]}"} guard at the call site makes the empty case bash-3.2-safe
-  # under `set -u` (macOS default bash is 3.2 — a bare "${arr[@]}" would abort).
-  local -a GRAMMAR_ARGS=()
-  if [[ -n "$GRAMMAR_FILE" ]]; then
-    GRAMMAR_ARGS=(--grammar-file "$GRAMMAR_FILE")
-    echo "  + grammar (hybrid arm): $GRAMMAR_FILE  [global --grammar-file ON TOP of --jinja]"
-  fi
   # NOTE: --chat-template-kwargs is deprecated-but-functional on build 5594d13
   # (warning only; --reasoning off is the startup-only alternative). Kept for
   # parity with the setup-guide recipe — see templates/README.md "Notes for #005".
@@ -189,7 +188,6 @@ cmd_start() {
     --temp "$TEMP" --top-p "$TOP_P" --top-k "$TOP_K" \
     --repeat-penalty "$REPEAT_PENALTY" --presence-penalty "$PRESENCE_PENALTY" \
     --repeat-last-n 256 \
-    ${GRAMMAR_ARGS[@]+"${GRAMMAR_ARGS[@]}"} \
     --jinja --chat-template-file "$TEMPLATE" \
     --chat-template-kwargs '{"enable_thinking":false}' \
     -n "$NPREDICT" \
@@ -208,8 +206,27 @@ cmd_start() {
 
 cmd_stop() {
   local pid stopped=0
-  if pid="$(running_pid)"; then kill "$pid" 2>/dev/null || true; stopped=1; fi
-  # also reap any orphan we own on this exact port (pidfile lost), never touching :11435
+  if pid="$(running_pid)"; then
+    kill "$pid" 2>/dev/null || true; stopped=1
+    # Bounded wait for the dying process to actually exit (#005 defect 3): a
+    # multi-GB llama-server can take seconds to unload, and without this wait
+    # `restart`'s lsof port preflight sees the dying server still LISTENing on
+    # the port and dies "port already in use" — reliably failing the restart.
+    local waited=0
+    while kill -0 "$pid" 2>/dev/null && [[ "$waited" -lt "$STOP_TIMEOUT" ]]; do
+      sleep 1; waited=$((waited+1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "  pid $pid still alive ${STOP_TIMEOUT}s after SIGTERM — escalating to SIGKILL" >&2
+      kill -9 "$pid" 2>/dev/null || true
+      sleep 1
+    fi
+    # brief grace so the kernel releases the LISTEN socket before any re-bind
+    # (same 10x1s loop cmd_install uses around bootout)
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      lsof -nP -iTCP:"$PORT" 2>/dev/null | grep -q LISTEN || break; sleep 1
+    done
+  fi
   rm -f "$PIDFILE"
   if [[ "$stopped" == 1 ]]; then echo "stopped opencode-server (was pid $pid)"; else echo "not running"; fi
 }
@@ -227,7 +244,7 @@ cmd_health() { if is_green; then echo "green: $BASE/health"; else echo "unreacha
 
 # /apply-template probe — proves the LIVE server carries the system-not-first fix
 # (#004 tier-64 / #018 tier-16) AND the closed <think></think> thinking-off prefill
-# (#017). Template-only (no GPU). Load-bearing for OpenCode: no claw.gbnf backstop.
+# (#017). Template-only (no GPU). Load-bearing for OpenCode: no grammar backstop.
 _probe_prompt() { curl -s -X POST "$BASE/apply-template" -H 'content-type: application/json' -d "$1" \
   | python3 -c 'import json,sys; print(json.load(sys.stdin).get("prompt",""))' 2>/dev/null || true; }
 cmd_probe() {
@@ -263,6 +280,17 @@ cmd_probe() {
 
 # --- launchd path (login-persistent; tier-64 = the resident daily daemon) ---
 cmd_install() {
+  # Render/poll parity (#005 defect 4): the plist templates hardcode each
+  # tier's default port/host (no __PORT__/__HOST__ placeholders), while this
+  # function's conflict check and wait_green honor the OPENCODE_LLAMA_PORT/HOST
+  # overrides — so an overridden install would boot a healthy daemon on the
+  # DEFAULT port and falsely die polling the override for HEALTH_TIMEOUT s.
+  # DOCUMENTED CHOICE: refuse overrides at install time (fail fast, pre-
+  # bootstrap) rather than render them — the resident daemon's identity is
+  # fixed by design; direct-boot `start` remains the override-friendly path.
+  if [[ "$PORT" != "$DEF_PORT" || "$HOST_BIND" != "0.0.0.0" ]]; then
+    die "install does not support OPENCODE_LLAMA_PORT/HOST overrides: the tier-$TIER plist hardcodes :$DEF_PORT on 0.0.0.0 (got port=$PORT host=$HOST_BIND). Unset the override(s), or use direct-boot 'start' which honors them."
+  fi
   preflight
   [[ -f "$PLIST_TEMPLATE" ]] || die "plist template missing: $PLIST_TEMPLATE (tier-$TIER has no launchd path — use start/stop)"
   # Hand over from a direct-boot instance of OUR OWN tier, if one is running

@@ -30,8 +30,11 @@
 // `docker rm -f`: killing the attached `docker compose run` CLI alone does not
 // reap the container (the hang lives in the container, parked on the model
 // socket). Once the container is gone the CLI exits on its own (verified #010),
-// the child closes, and we RESOLVE with terminal_status 'timeout' — never
-// reject — so runAgent's diagnostics still flush and the reporter writes a row.
+// the child closes, and we RESOLVE — never reject — so runAgent's diagnostics
+// still flush and the reporter writes a row. terminal_status distinguishes the
+// abort source (issue #001): the internal hard ceiling → 'timeout'; a
+// caller-initiated abort (runAgent cancellation, Ctrl-C) → 'interrupted', which
+// paired_bootstrap.isEligible excludes from pass-rate denominators.
 //
 // Transcript adapter (#021): on a real run, the agent container's OpenCode
 // session is captured by BIND-MOUNTING its SQLite data dir
@@ -231,9 +234,16 @@ export function runOpenCode({
     child.stderr.on('data', (b) => { stderr += b.toString('utf8'); });
 
     let abortHandled = false;
+    // Which abort source fired (issue #001 fix 2): AbortSignal.any erases
+    // provenance, so sample the caller signal the moment the kill path runs.
+    // At that instant either the caller signal has fired (caller cancellation
+    // → 'interrupted') or it is still quiet and the internal
+    // AbortSignal.timeout ceiling tripped us (→ 'timeout').
+    let callerAborted = false;
     const onAbort = () => {
       if (abortHandled) return;
       abortHandled = true;
+      callerAborted = !!signal?.aborted;
       // Hard kill. `docker rm -f` force-removes (SIGKILL) the run container —
       // the only thing that terminates a silent hang. Bounded + best-effort so
       // a wedged daemon can't hang the reap; fall through to child.kill either
@@ -257,13 +267,27 @@ export function runOpenCode({
       resolve(result);
     };
 
+    // Issue #001 fix 1: extend `settled`'s once-only discipline to the sidecar.
+    // A spawn failure emits 'error' THEN 'close' (code -2, node 22/24); without
+    // this guard the close handler would re-run writeSidecar with
+    // spawnError=null, relabeling the 'harness_error' sidecar as a plain
+    // 'error' run — and registry_emit builds the row entirely from the on-disk
+    // sidecar, so the run would enter paired_bootstrap.isEligible as an
+    // eligible model failure.
+    let sidecarWritten = false;
+    const writeSidecarOnce = (opts) => {
+      if (sidecarWritten) return;
+      sidecarWritten = true;
+      writeSidecar(opts);
+    };
+
     child.on('error', (err) => {
       // spawn-level failure (e.g. docker binary missing). Not a hang and not a
       // clean exit — surface as a harness error result (code null) rather than
       // rejecting, so runAgent's diagnostics still flush a row. No run happened →
       // no DB to normalize; outcome-only sidecar.
       const runFinishedMs = Date.now();
-      writeSidecar({
+      writeSidecarOnce({
         runtimeRoot, runId, runStartedMs, runFinishedMs,
         code: null, timeout: false, timeoutMs,
         spawnError: String(err?.message ?? err),
@@ -285,6 +309,15 @@ export function runOpenCode({
       const runFinishedMs = Date.now();
       const elapsedMs = runFinishedMs - runStartedMs;
       const aborted = !!combinedSignal?.aborted;
+      // 'error' already settled the promise (spawn failure): 'close' still
+      // fires after it, but must not relabel the run — writeSidecarOnce keeps
+      // the sidecar intact and `finish` keeps the promise intact; also skip
+      // the transcript build (no container ever ran, so there is no DB).
+      const spawnFailed = settled;
+      // Caller abort (runAgent cancellation) vs internal hard ceiling — set by
+      // onAbort at kill time. Caller aborts are 'interrupted' (excluded from
+      // pass-rate denominators), the internal timer stays 'timeout'.
+      const interrupted = aborted && callerAborted;
 
       // #022: close the log cursor and capture this run's slice of the server's
       // prompt/decode timing blocks (empty array when the flag is off).
@@ -296,8 +329,14 @@ export function runOpenCode({
       // server.timings.jsonl). Best-effort: a wedged/killed run leaves a
       // partial/absent DB (#020 §6), so on null/throw we DEGRADE to the
       // outcome-only sidecar below — the claw timeout-path analog, never a hang.
+      // Caller-aborted runs also degrade to the outcome-only sidecar: the
+      // transcript builder can only label timeout/done/error, so normalizing
+      // here would mislabel the run — and a hard-killed run's DB is partial or
+      // absent anyway (#020 §6). Interrupted rows are excluded from analysis
+      // (passed=null, isEligible drops them), so the lost iteration telemetry
+      // is moot; the honest label is what matters.
       let meta = null;
-      if (dataDir) {
+      if (dataDir && !spawnFailed && !interrupted) {
         try {
           meta = buildOpenCodeArtifacts({
             dbPath: path.join(dataDir, 'opencode.db'),
@@ -314,9 +353,12 @@ export function runOpenCode({
       // No usable transcript (exec seam, opt-out, or absent/partial DB) → write
       // the outcome-only sidecar so run_row.js still gets a row (iters_count=0).
       if (!meta) {
-        writeSidecar({
+        writeSidecarOnce({
           runtimeRoot, runId, runStartedMs, runFinishedMs,
-          code: aborted ? null : code, timeout: aborted, timeoutMs,
+          code: aborted ? null : code,
+          timeout: aborted && !interrupted,
+          interrupted,
+          timeoutMs,
         });
       }
 
@@ -331,12 +373,15 @@ export function runOpenCode({
         : { iterCount: 0 };
 
       // Timeout/abort RESOLVES (never rejects) — the load-bearing #009 contract.
-      // code:null + terminal_status:'timeout' so any `assert.equal(code, 0)` in
-      // a test body still fails the cell cleanly while the reporter's flush runs.
+      // code:null so any `assert.equal(code, 0)` in a test body still fails the
+      // cell cleanly while the reporter's flush runs. terminal_status mirrors
+      // the sidecar: 'interrupted' for a caller abort, 'timeout' for the
+      // internal hard ceiling.
       if (aborted) {
         finish({
-          code: null, signal: null, stdout, stderr, elapsedMs,
-          runDir, runId, terminal_status: 'timeout', timeout: true, ...extra,
+          code: null, signal: null, stdout, stderr, elapsedMs, runDir, runId,
+          terminal_status: interrupted ? 'interrupted' : 'timeout',
+          timeout: !interrupted, ...extra,
         });
         return;
       }
@@ -353,7 +398,7 @@ export function runOpenCode({
  * write hiccup the path is still returned and runAgent's runDir guard / the
  * expected-attempts diff catch the missing sidecar.
  */
-function writeSidecar({ runtimeRoot, runId, runStartedMs, runFinishedMs, code, timeout, timeoutMs, spawnError = null }) {
+function writeSidecar({ runtimeRoot, runId, runStartedMs, runFinishedMs, code, timeout, timeoutMs, interrupted = false, spawnError = null }) {
   const runDir = path.join(runtimeRoot, runId);
   try {
     fs.mkdirSync(runDir, { recursive: true });
@@ -361,8 +406,12 @@ function writeSidecar({ runtimeRoot, runId, runStartedMs, runFinishedMs, code, t
     // empty iterations.jsonl (iters_count = 0).
     fs.writeFileSync(path.join(runDir, 'iterations.jsonl'), '');
 
-    const terminal_status = timeout ? 'timeout'
-      : spawnError ? 'harness_error'
+    // Precedence: a harness-side spawn failure outranks everything; then the
+    // abort labels (caller cancellation vs internal hard ceiling — mutually
+    // exclusive by construction in the close handler); then the exit code.
+    const terminal_status = spawnError ? 'harness_error'
+      : interrupted ? 'interrupted'
+      : timeout ? 'timeout'
       : (code === 0 ? 'done' : 'error');
 
     const summary = {
@@ -386,7 +435,9 @@ function writeSidecar({ runtimeRoot, runId, runStartedMs, runFinishedMs, code, t
       // Telemetry only — coarse and absent on hangs (#009).
       exit_code: code,
       spawn_error: spawnError,
-      censored: !!timeout,
+      // Cut-short observations are censored whether the internal ceiling or
+      // the caller did the cutting.
+      censored: !!(timeout || interrupted),
       // Marker that iteration/token telemetry is intentionally absent (#021).
       telemetry: 'outcome_only',
     };

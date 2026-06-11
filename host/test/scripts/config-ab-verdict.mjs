@@ -35,6 +35,7 @@ import {
   pairedBootstrapCI,
   summarizeTasks,
   percentile,
+  isEligible,
   PairedBootstrapError,
 } from '../lib/paired_bootstrap.js';
 import { VALID_CONFIGS } from '../lib/config.js';
@@ -70,11 +71,6 @@ function parseArgs(argv) {
   }
   return opts;
 }
-
-const isEligible = (r) =>
-  typeof r.passed === 'boolean' &&
-  r.terminal_status !== 'harness_error' &&
-  r.terminal_status !== 'interrupted';
 
 const durationS = (r) =>
   r.start_time && r.end_time
@@ -150,6 +146,11 @@ function main() {
   if (rule1 && superior) console.log(`  note               : CI excludes 0 from below → superior, not merely non-inferior`);
 
   // --- Wall-clock (Rule 0a.2) ------------------------------------------------
+  // end_time: null is schema-legal (degraded sidecars) and such rows stay
+  // pass-rate-eligible, so a side can legitimately have ZERO rows with
+  // timestamps. median/pctile return null on empty input — guard every chained
+  // .toFixed (and the Math.max(...[]) → -Infinity hole) instead of crashing
+  // after Rule 0a.1 has already rendered (issue #012).
   console.log('\n--- Rule 0a.2: wall-clock ---');
   const stats = {};
   for (const cid of [BASELINE, TREATMENT]) {
@@ -157,14 +158,32 @@ function main() {
     const durAll = sideAll.map(durationS).filter((d) => d != null);
     const durElig = sideAll.filter(isEligible).map(durationS).filter((d) => d != null);
     stats[cid] = { durAll, durElig, n: sideAll.length };
+    if (!durAll.length) {
+      console.log(`  ${cid.padEnd(11)} wall-clock unavailable (n=0 rows with timestamps)`);
+      continue;
+    }
+    const eligPart = durElig.length
+      ? `eligible-only median ${median(durElig).toFixed(1)}s`
+      : 'eligible-only wall-clock unavailable (n=0 rows with timestamps)';
     console.log(
       `  ${cid.padEnd(11)} median ${median(durAll).toFixed(1)}s  p90 ${pctile(durAll, 0.9).toFixed(1)}s  ` +
-        `max ${Math.max(...durAll).toFixed(1)}s  (n=${durAll.length}; eligible-only median ${median(durElig).toFixed(1)}s)`,
+        `max ${Math.max(...durAll).toFixed(1)}s  (n=${durAll.length}; ${eligPart})`,
     );
   }
-  const ratio = median(stats[TREATMENT].durAll) / median(stats[BASELINE].durAll);
-  const rule2 = ratio <= SPEED_MULT;
-  console.log(`  ratio (${TREATMENT} median / ${BASELINE} median): ${ratio.toFixed(2)}×  ${rule2 ? '≤' : '>'} ${SPEED_MULT}×  →  ${rule2 ? 'MET' : 'NOT MET'}`);
+  const treatMedian = median(stats[TREATMENT].durAll);
+  const baseMedian = median(stats[BASELINE].durAll);
+  const wallAvailable = treatMedian != null && baseMedian != null;
+  let rule2 = false;
+  if (wallAvailable) {
+    const ratio = treatMedian / baseMedian;
+    rule2 = ratio <= SPEED_MULT;
+    console.log(`  ratio (${TREATMENT} median / ${BASELINE} median): ${ratio.toFixed(2)}×  ${rule2 ? '≤' : '>'} ${SPEED_MULT}×  →  ${rule2 ? 'MET' : 'NOT MET'}`);
+  } else {
+    // No timestamps on at least one side → the speed limb cannot be evaluated.
+    // Conservative: an unestablished rule is NOT MET (this is a reporter; the
+    // unavailability is stated explicitly rather than implied by a ratio).
+    console.log(`  ratio (${TREATMENT} median / ${BASELINE} median): wall-clock unavailable (n=0 rows with timestamps)  →  NOT MET`);
+  }
 
   // --- Iteration parity ------------------------------------------------------
   console.log('\n--- Iteration parity (iters_count) ---');
@@ -207,7 +226,7 @@ function main() {
   const retire = rule1 && rule2;
   console.log('\n=== VERDICT (tier-' + tier + ') ===');
   console.log(`  Rule 0a.1 (pass-rate non-inferiority): ${rule1 ? 'MET' : 'NOT MET'}`);
-  console.log(`  Rule 0a.2 (wall-clock ≤ ${SPEED_MULT}×)       : ${rule2 ? 'MET' : 'NOT MET'}`);
+  console.log(`  Rule 0a.2 (wall-clock ≤ ${SPEED_MULT}×)       : ${rule2 ? 'MET' : 'NOT MET'}${wallAvailable ? '' : ' (wall-clock unavailable)'}`);
   if (BASELINE === 'claw-rig') {
     console.log(
       `  → ${retire ? 'RETIRE the claw rig at this tier' : 'KEEP the claw rig at this tier'}` +

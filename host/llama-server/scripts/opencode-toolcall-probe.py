@@ -70,11 +70,14 @@ def check_toolcall(name, base, model, tools, user, want_tool, want_keys, tool_ch
     fr = choice.get("finish_reason")
     tcs = msg.get("tool_calls") or []
     content = msg.get("content") or ""
-    leak = "<tool_call>" in content
+    # Parity with validate-tool-calls.sh: a leak is the wrapper OR the inner syntax —
+    # the corrected qwen templates emit `<tool_call>\n<function=...`, so a stray
+    # `<function=` without the wrapper is just as much a parse break.
+    leak = "<tool_call>" in content or "<function=" in content
     if not tcs:
         if leak:
-            return False, (f"{name} (tc={tool_choice}): NO tool_calls but <tool_call> LEAKED into "
-                           f"content (finish={fr}) → PARSING BROKE")
+            return False, (f"{name} (tc={tool_choice}): NO tool_calls but raw <tool_call>/<function=> "
+                           f"XML LEAKED into content (finish={fr}) → PARSING BROKE")
         return None, (f"{name} (tc={tool_choice}): model returned prose, no tool_call "
                       f"(finish={fr}); content[:80]={content[:80]!r} — inconclusive, not a parse break")
     fn = tcs[0].get("function", {}) or {}

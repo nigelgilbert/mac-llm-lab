@@ -130,7 +130,13 @@ const RE_PRINT_TIMING = /slot print_timing:\s*id\s+(\d+)\s*\|\s*task\s+(-?\d+)/;
 const RE_TIMING_LINE =
   /time\s*=\s*([\d.]+)\s*ms\s*\/\s*(\d+)\s*tokens(?:\s*\(\s*[\d.]+\s*ms per token,\s*([\d.]+)\s*tokens per second\))?/;
 
-function numOrNull(v) {
+// The ONE exported coercing `numOrNull` shared across the OpenCode modules
+// (issue #017): Number()-coercing because this log parser feeds regex string
+// captures ('42' → 42). Number() edges are pinned by unit tests ('' → 0,
+// true → 1). The transcript's strict variant is `strictNumOrNull` over in
+// opencode_transcript.js ('42' → null) — deliberately distinct names so the
+// divergent semantics can never be silently merged again.
+export function numOrNull(v) {
   if (v == null) return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;

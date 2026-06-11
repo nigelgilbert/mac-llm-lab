@@ -24,7 +24,10 @@
 //   - reasoning tokens have no claw slot → surfaced as an additive
 //     `reasoning_tokens` field (not silently dropped).
 //   - cost is always 0 (local model) → ignored.
-//   - tool error = state.status !== 'completed' OR (bash) metadata.exit !== 0.
+//   - tool error = state.status !== 'completed' OR (bash) metadata.exit !== 0;
+//     EXCEPT on a censored (timeout) run, where a part still pending/running was
+//     in flight when the container was hard-killed → classified 'truncated'
+//     (result_truncated, truncated_tool_call_count), not an error (#017).
 //   - unmapped tools → workspace_changed=null AND flagged (`tool_unmapped`).
 //
 // A wedged/killed run leaves a partial or absent DB (#020 §6). Every entry point
@@ -33,10 +36,12 @@
 // analog) and never hang.
 //
 // The small pure helpers (sha256OfStable, makeArgSummary, classifyError,
-// extractErrorSignature, stringifySorted, numOrNull) were duplicated from the
-// retired claw runner — the original schema-v1 writer — deliberately, to avoid
-// importing its heavy module graph (workspace/run_row/test_manifest/config)
-// into the runner's hot path. This module is now their canonical home.
+// extractErrorSignature, stringifySorted, strictNumOrNull) were duplicated from
+// the retired claw runner — the original schema-v1 writer — deliberately, to
+// avoid importing its heavy module graph (workspace/run_row/test_manifest/
+// config) into the runner's hot path. This module is now their canonical home.
+// (The Number()-coercing `numOrNull` lives in opencode_server_timings.js —
+// issue #017 keeps exactly one exported coercing version across both modules.)
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -136,9 +141,31 @@ function readViaNodeSqlite(dbPath) {
   }
 }
 
+/**
+ * Build the sqlite3-CLI argv for a query, splicing an optional bind value in
+ * as a single-quoted SQL string literal. #017 hardening of the degrade path
+ * (only reached when node:sqlite is absent): the old inline
+ * sql.replace('?', `'${bind}'`) left single quotes unescaped AND let
+ * String.replace interpret `$`-patterns ($&, $', …) in the bind. Quotes are
+ * doubled per SQL ('' escaping) and the replacement is a FUNCTION, which
+ * String.replace inserts verbatim — no $-pattern expansion. Exported for the
+ * unit test that pins this.
+ *
+ * @param {string} dbPath
+ * @param {string} sql           Query with at most one `?` placeholder.
+ * @param {string} [bind]        Value spliced into the `?` (session id).
+ * @returns {string[]} argv for spawnSync('sqlite3', argv).
+ */
+export function buildSqliteCliArgs(dbPath, sql, bind) {
+  const bound = bind == null
+    ? sql
+    : sql.replace('?', () => `'${String(bind).replace(/'/g, "''")}'`);
+  return ['-readonly', '-json', dbPath, bound];
+}
+
 function readViaSqliteCli(dbPath) {
   const q = (sql, bind) => {
-    const args = ['-readonly', '-json', dbPath, bind ? sql.replace('?', `'${bind}'`) : sql];
+    const args = buildSqliteCliArgs(dbPath, sql, bind);
     const r = spawnSync('sqlite3', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
     if (r.error) throw r.error;
     if (r.status !== 0) throw new Error(`sqlite3 exited ${r.status}: ${(r.stderr || '').trim()}`);
@@ -236,6 +263,7 @@ export function normalizeOpenCodeSession({
   let resultChangedCount = 0;
   let noProgressRepeatCount = 0;
   let errorToolCallCount = 0;
+  let truncatedToolCallCount = 0;
   let unmappedToolCallCount = 0;
   let repeatedToolCallCount = 0;
   const uniqueArgHashes = new Set();
@@ -246,11 +274,11 @@ export function normalizeOpenCodeSession({
     const tokens = d.tokens || {};
     const cache = tokens.cache || {};
 
-    const inputTokens = numOrNull(tokens.input);
-    const outputTokens = numOrNull(tokens.output);
-    const reasoningTokens = numOrNull(tokens.reasoning) ?? 0;
-    const cacheCreate = numOrNull(cache.write) ?? 0;
-    const cacheRead = numOrNull(cache.read) ?? 0;
+    const inputTokens = strictNumOrNull(tokens.input);
+    const outputTokens = strictNumOrNull(tokens.output);
+    const reasoningTokens = strictNumOrNull(tokens.reasoning) ?? 0;
+    const cacheCreate = strictNumOrNull(cache.write) ?? 0;
+    const cacheRead = strictNumOrNull(cache.read) ?? 0;
 
     if (inputTokens != null) totals.inputTokens += inputTokens;
     if (outputTokens != null) totals.outputTokens += outputTokens;
@@ -259,8 +287,8 @@ export function normalizeOpenCodeSession({
     totals.cacheRead += cacheRead;
     if (inputTokens != null && inputTokens > maxInputTokens) maxInputTokens = inputTokens;
 
-    const createdMs = numOrNull(d.time?.created);
-    const completedMs = numOrNull(d.time?.completed);
+    const createdMs = strictNumOrNull(d.time?.created);
+    const completedMs = strictNumOrNull(d.time?.completed);
 
     const msgParts = partsByMessage.get(am.id) || [];
     const toolParts = msgParts.filter((p) => p?.data && p.data.type === 'tool');
@@ -278,14 +306,21 @@ export function normalizeOpenCodeSession({
       const resultHash = sha256OfStable(output);
 
       // §4.2.5 error shape: any non-'completed' status, or a non-zero bash exit.
+      // EXCEPT (#017): on a censored run a part still pending/running was simply
+      // in flight when the container was hard-killed (`docker rm -f`) — that is
+      // truncation, not a tool failure. Truncated calls are excluded from error
+      // counts (own counter instead) and their workspace_changed is null
+      // (unknown — the kill raced the tool). An actually-errored part on a
+      // censored run (status 'error', non-zero bash exit) still counts.
+      const isTruncated = !!timeout && (st.status === 'pending' || st.status === 'running');
       const statusErr = st.status != null && st.status !== 'completed';
-      const bashExit = name === 'bash' ? numOrNull(st.metadata?.exit) : null;
-      const isError = statusErr || (bashExit != null && bashExit !== 0);
+      const bashExit = name === 'bash' ? strictNumOrNull(st.metadata?.exit) : null;
+      const isError = !isTruncated && (statusErr || (bashExit != null && bashExit !== 0));
       const errorClass = isError ? classifyError(output) : null;
       const errorSignature = isError ? extractErrorSignature(output) : null;
 
-      const startedMs = numOrNull(st.time?.start);
-      const finishedMs = numOrNull(st.time?.end);
+      const startedMs = strictNumOrNull(st.time?.start);
+      const finishedMs = strictNumOrNull(st.time?.end);
       const elapsedMs = startedMs != null && finishedMs != null ? finishedMs - startedMs : null;
       if (elapsedMs != null) {
         iterToolElapsedMs = (iterToolElapsedMs ?? 0) + elapsedMs;
@@ -307,9 +342,11 @@ export function normalizeOpenCodeSession({
 
       const toolUnmapped = name == null || !(name in OPENCODE_WORKSPACE_CHANGED_BY_TOOL);
       if (toolUnmapped) unmappedToolCallCount += 1;
-      const workspaceChanged = computeWorkspaceChanged(name, isError);
+      // Truncated → null (unknown), NOT the pre-#017 forced false via isError.
+      const workspaceChanged = isTruncated ? null : computeWorkspaceChanged(name, isError);
       if (workspaceChanged === true) workspaceChangedCount += 1;
       if (isError) errorToolCallCount += 1;
+      if (isTruncated) truncatedToolCallCount += 1;
 
       return {
         id: t.callID ?? null,
@@ -327,6 +364,8 @@ export function normalizeOpenCodeSession({
         result_hash: resultHash,
         result_changed_vs_previous_same_call: resultChangedVsPrev,
         result_is_error: isError,
+        // #017: in-flight (pending/running) at hard-kill on a censored run.
+        result_truncated: isTruncated,
         result_error_class: errorClass,
         result_error_signature: errorSignature,
       };
@@ -337,7 +376,7 @@ export function normalizeOpenCodeSession({
     // iteration_elapsed = next.created - this.created (final → runFinished - created);
     // non_model_gap = next.created - this.completed (final → runFinished - completed).
     const next = assistantMsgs[k + 1];
-    const nextCreatedMs = next ? numOrNull(next.data?.time?.created) : null;
+    const nextCreatedMs = next ? strictNumOrNull(next.data?.time?.created) : null;
     let iterationElapsedMs = null;
     if (createdMs != null) {
       if (nextCreatedMs != null) iterationElapsedMs = nextCreatedMs - createdMs;
@@ -401,7 +440,7 @@ export function normalizeOpenCodeSession({
     session, runId, runStartedMs, runFinishedMs, code, timeout, timeoutMs,
     iterRecords, totals, toolElapsedSeen, maxInputTokens, toolCallCountTotal,
     workspaceChangedCount, resultChangedCount, noProgressRepeatCount,
-    errorToolCallCount, unmappedToolCallCount,
+    errorToolCallCount, truncatedToolCallCount, unmappedToolCallCount,
     uniqueArgHashesCount: uniqueArgHashes.size, repeatedToolCallCount,
   });
 
@@ -412,8 +451,8 @@ function buildRunSummary({
   session, runId, runStartedMs, runFinishedMs, code, timeout, timeoutMs,
   iterRecords, totals, toolElapsedSeen, maxInputTokens, toolCallCountTotal,
   workspaceChangedCount, resultChangedCount, noProgressRepeatCount,
-  errorToolCallCount, unmappedToolCallCount, uniqueArgHashesCount,
-  repeatedToolCallCount,
+  errorToolCallCount, truncatedToolCallCount, unmappedToolCallCount,
+  uniqueArgHashesCount, repeatedToolCallCount,
 }) {
   const empty = iterRecords.length === 0;
   const join_status = empty ? 'empty_session' : 'n/a_opencode';
@@ -442,17 +481,24 @@ function buildRunSummary({
       'reflect only what reached the DB before the kill.',
     );
   }
+  if (truncatedToolCallCount > 0) {
+    timing_caveats.push(
+      `truncated_tool_calls: ${truncatedToolCallCount} tool part(s) still ` +
+      'pending/running at hard-kill — classified truncated (#017): excluded ' +
+      'from error_tool_call_count, workspace_changed=null (unknown).',
+    );
+  }
   if (empty) {
     timing_caveats.push('empty_session: no assistant messages in the DB.');
   }
 
   // Prefer the session row's own rollups (authoritative); fall back to the
   // per-iteration sums when a column is absent.
-  const sTokIn = numOrNull(session?.tokens_input);
-  const sTokOut = numOrNull(session?.tokens_output);
-  const sTokReas = numOrNull(session?.tokens_reasoning);
-  const sCacheRead = numOrNull(session?.tokens_cache_read);
-  const sCacheWrite = numOrNull(session?.tokens_cache_write);
+  const sTokIn = strictNumOrNull(session?.tokens_input);
+  const sTokOut = strictNumOrNull(session?.tokens_output);
+  const sTokReas = strictNumOrNull(session?.tokens_reasoning);
+  const sCacheRead = strictNumOrNull(session?.tokens_cache_read);
+  const sCacheWrite = strictNumOrNull(session?.tokens_cache_write);
 
   return {
     schema_version: SCHEMA_VERSION,
@@ -503,6 +549,9 @@ function buildRunSummary({
     result_changed_vs_prev_count: resultChangedCount,
     no_progress_repeat_count: noProgressRepeatCount,
     error_tool_call_count: errorToolCallCount,
+    // Additive vs claw (#017): in-flight (pending/running) parts at hard-kill
+    // on a censored run — truncation, not tool failure. 0 on non-censored runs.
+    truncated_tool_call_count: truncatedToolCallCount,
     // Additive vs claw.
     unmapped_tool_call_count: unmappedToolCallCount,
     terminal_status: timeout ? 'timeout' : (code === 0 ? 'done' : 'error'),
@@ -515,7 +564,7 @@ function buildRunSummary({
     timing_caveats,
     session_id: session?.id ?? null,
     session_workspace_root: session?.directory ?? null,
-    session_created_at_ms: numOrNull(session?.time_created),
+    session_created_at_ms: strictNumOrNull(session?.time_created),
     // Marker that this sidecar carries normalized transcript telemetry (vs the
     // runner's outcome_only fallback).
     telemetry: 'transcript',
@@ -698,7 +747,13 @@ function stringifySorted(value) {
   return '{' + keys.map((k) => JSON.stringify(k) + ':' + stringifySorted(value[k])).join(',') + '}';
 }
 
-function numOrNull(v) {
+// STRICT numeric guard ('42' → null): DB-sourced token/timestamp fields are
+// already typed numbers, and silently coercing a string here would mask a
+// schema drift. Deliberately distinct from the ONE exported coercing
+// `numOrNull` in opencode_server_timings.js ('42' → 42, needed for regex
+// captures) — issue #017 killed the same-name duplication. Exported so tests
+// pin both behaviors.
+export function strictNumOrNull(v) {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 

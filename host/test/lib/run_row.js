@@ -10,10 +10,12 @@
 //     hence the parameter name): runId, runDir, iterationsPath,
 //     runSummaryPath, code, elapsedMs, etc.
 //   - ctx: caller-supplied registry context — at minimum:
-//       run_kind, hardware_tier, memory_gb, model_config_id,
+//       run_kind, hardware_tier, memory_gb, config_id, model_config_id,
 //       test_id, test_version, oracle_type, harness_version
+//     config_id (the coarse A/B bundle label) is REQUIRED with no default
+//     (issue #009): the live path supplies it via resolveConfigId(); the
+//     offline harvester supplies it via its required --config-id flag.
 //     Optional fields: canonical_status (default 'canonical'),
-//       config_id (coarse bundle label, default 'claw-rig'),
 //       seed, prompt_pack_version, screening_only, iteration_budget,
 //       timeout_budget_ms, manifestPath (override for model-config lookup),
 //       registryPath (override target jsonl), now (clock injection for tests).
@@ -61,6 +63,21 @@ export function assembleRow(clawResult, ctx) {
       throw new RunRowAssemblyError(`ctx.${k} is required`);
     }
   }
+  // Issue #009: config_id (the coarse A/B bundle label) is REQUIRED — no
+  // 'claw-rig' default. Minting the historical baseline label by omission is
+  // exactly how an offline-recovered opencode run lands on the wrong side of
+  // the A/B (it passes the pairing gate's enum check and buckets as baseline).
+  // 'claw-rig' stays in the schema enum for the preserved historical
+  // registries; it just can never again be stamped implicitly. The live path
+  // supplies config_id via resolveConfigId(); the offline harvester via its
+  // required --config-id flag.
+  if (ctx.config_id === undefined || ctx.config_id === null || ctx.config_id === '') {
+    throw new RunRowAssemblyError(
+      "ctx.config_id is required (no 'claw-rig' default — issue #009): pass the "
+      + "run's coarse bundle label explicitly (live path: resolveConfigId(); "
+      + 'offline harvest: --config-id).',
+    );
+  }
 
   const runId = clawResult.runId;
   if (!runId) throw new RunRowAssemblyError('clawResult.runId is required');
@@ -99,9 +116,9 @@ export function assembleRow(clawResult, ctx) {
     canonical_status: ctx.canonical_status ?? 'canonical',
     hardware_tier: ctx.hardware_tier,
     memory_gb: ctx.memory_gb,
-    // Coarse bundle label (issue #002). Threaded from run context; existing
-    // claw runs default to 'claw-rig' so pre-opencode callers need no change.
-    config_id: ctx.config_id ?? 'claw-rig',
+    // Coarse bundle label (issue #002). Always threaded from run context;
+    // required with no default since issue #009 (guard above).
+    config_id: ctx.config_id,
     model_config_id: ctx.model_config_id,
     model_id: config.model_id,
     quantization: config.quantization,

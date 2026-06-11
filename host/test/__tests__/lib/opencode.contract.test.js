@@ -100,7 +100,10 @@ describe('runOpenCode: timeout RESOLVES (never rejects)', () => {
 });
 
 describe('runOpenCode: combined-signal honors the caller signal', () => {
-  it('resolves timeout when the caller aborts (no internal timeoutMs set)', async () => {
+  // Issue #001: a caller-initiated abort is labeled 'interrupted', not
+  // 'timeout' — only the internal AbortSignal.timeout ceiling says 'timeout'.
+  // The full sidecar-side assertions live in opencode-sidecar-status.test.js.
+  it('resolves interrupted when the caller aborts (no internal timeoutMs set)', async () => {
     const ac = new AbortController();
     const start = Date.now();
     const p = runOpenCode({ ...base(), exec: SLEEP, signal: ac.signal });
@@ -108,7 +111,7 @@ describe('runOpenCode: combined-signal honors the caller signal', () => {
     let r;
     await assert.doesNotReject(async () => { r = await p; });
     assert.equal(r.code, null);
-    assert.equal(r.terminal_status, 'timeout');
+    assert.equal(r.terminal_status, 'interrupted');
     assert.ok(Date.now() - start < 10_000);
   });
 
@@ -116,16 +119,17 @@ describe('runOpenCode: combined-signal honors the caller signal', () => {
     const r = await runOpenCode({
       ...base(), exec: SLEEP, signal: AbortSignal.abort(),
     });
-    assert.equal(r.terminal_status, 'timeout');
+    assert.equal(r.terminal_status, 'interrupted');
     assert.equal(r.code, null);
   });
 
   it('whichever of caller-signal / timeoutMs fires first wins, still resolves', async () => {
-    // Caller signal fires at 150ms; internal ceiling is far out — caller wins.
+    // Caller signal fires at 150ms; internal ceiling is far out — caller wins,
+    // so the run is labeled a caller interruption rather than a timeout.
     const ac = new AbortController();
     setTimeout(() => ac.abort(), 150);
     const r = await runOpenCode({ ...base(), exec: SLEEP, signal: ac.signal, timeoutMs: 60_000 });
-    assert.equal(r.terminal_status, 'timeout');
+    assert.equal(r.terminal_status, 'interrupted');
   });
 });
 

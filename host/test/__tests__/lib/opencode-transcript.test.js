@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -26,7 +27,10 @@ import {
   normalizeOpenCodeSession,
   buildOpenCodeArtifacts,
   readOpenCodeSession,
+  buildSqliteCliArgs,
+  strictNumOrNull,
 } from '../../lib/opencode_transcript.js';
+import { numOrNull as coercingNumOrNull } from '../../lib/opencode_server_timings.js';
 
 // --- fixtures: shapes copied from the real #020 evidence DB (trimmed) ---------
 
@@ -328,6 +332,219 @@ describe('normalizeOpenCodeSession — tool error shapes (§4.2.5)', () => {
     const tc = iterRecords[2].tool_calls[0];
     assert.equal(tc.result_is_error, true);
     assert.equal(tc.workspace_changed, false);
+  });
+});
+
+// --- #017: censored-run in-flight parts are truncated, not errors -------------
+
+// happyRun() mutated for the censored case: the edit part becomes a REAL error
+// (status 'error' — must still count), the bash part becomes an in-flight
+// 'running' WRITE part (no output, no end time — the hard-kill raced it).
+function censoredRun() {
+  const f = happyRun();
+  const edit = f.parts.find((x) => x.data.type === 'tool' && x.data.tool === 'edit');
+  edit.data.state.status = 'error';
+  edit.data.state.output = 'Error: ENOENT no such file or directory';
+  const bashIdx = f.parts.findIndex((x) => x.data.type === 'tool' && x.data.tool === 'bash');
+  f.parts[bashIdx] = toolPart('msg_a3', 1780774007128, 'write', 'inflightWrite', {
+    status: 'running',
+    input: { filePath: '/workspace/new.py', content: 'print(1)\n' },
+    time: { start: 1780774007127 }, // no end — killed mid-flight
+  });
+  return f;
+}
+
+describe('normalizeOpenCodeSession — censored-run in-flight parts → truncated (#017)', () => {
+  const normCensored = () => normalizeOpenCodeSession({
+    ...censoredRun(), runId: 'r-cens', runStartedMs: 1780774001000,
+    runFinishedMs: 1780774008100, code: null, timeout: true, timeoutMs: 600000,
+  });
+
+  it('running part on a censored run: truncated, NOT an error, workspace_changed null', () => {
+    const { iterRecords, runSummary } = normCensored();
+    const tc = iterRecords[2].tool_calls[0]; // the in-flight write
+    assert.equal(tc.name, 'write');
+    assert.equal(tc.result_truncated, true);
+    assert.equal(tc.result_is_error, false);
+    assert.equal(tc.result_error_class, null);
+    assert.equal(tc.result_error_signature, null);
+    // Neither forced false (the pre-#017 bug) nor counted true: unknown.
+    assert.equal(tc.workspace_changed, null);
+    assert.equal(runSummary.truncated_tool_call_count, 1);
+    assert.match(runSummary.timing_caveats.join(' '), /truncated_tool_calls: 1/);
+  });
+
+  it('an actually-errored part on the SAME censored run still counts as an error', () => {
+    const { iterRecords, runSummary } = normCensored();
+    const tc = iterRecords[1].tool_calls[0]; // the status:'error' edit
+    assert.equal(tc.result_is_error, true);
+    assert.equal(tc.result_truncated, false);
+    assert.equal(tc.result_error_class, 'not_found');
+    assert.equal(tc.workspace_changed, false);
+    assert.equal(runSummary.error_tool_call_count, 1); // edit only — not the running write
+  });
+
+  it('workspace_changed_count is unaffected by the truncated part', () => {
+    const { runSummary } = normCensored();
+    // read=false (ok), edit errored→false, write truncated→null: no true left.
+    assert.equal(runSummary.workspace_changed_count, 0);
+  });
+
+  it("'pending' parts on a censored run are truncated too", () => {
+    const f = censoredRun();
+    const w = f.parts.find((x) => x.data.type === 'tool' && x.data.tool === 'write');
+    w.data.state.status = 'pending';
+    const { iterRecords, runSummary } = normalizeOpenCodeSession({
+      ...f, runId: 'r', runStartedMs: 1, runFinishedMs: 2, code: null, timeout: true,
+    });
+    assert.equal(iterRecords[2].tool_calls[0].result_truncated, true);
+    assert.equal(runSummary.truncated_tool_call_count, 1);
+    assert.equal(runSummary.error_tool_call_count, 1);
+  });
+
+  it('NON-censored run keeps the old semantics: a running part is an error', () => {
+    const f = censoredRun();
+    const { iterRecords, runSummary } = normalizeOpenCodeSession({
+      ...f, runId: 'r', runStartedMs: 1, runFinishedMs: 2, code: 1, timeout: false,
+    });
+    const tc = iterRecords[2].tool_calls[0];
+    assert.equal(tc.result_truncated, false);
+    assert.equal(tc.result_is_error, true);
+    assert.equal(tc.workspace_changed, false);
+    assert.equal(runSummary.truncated_tool_call_count, 0);
+    assert.equal(runSummary.error_tool_call_count, 2); // errored edit + running write
+  });
+
+  it('happy completed run carries truncated_tool_call_count 0 and result_truncated false', () => {
+    const { iterRecords, runSummary } = norm();
+    assert.equal(runSummary.truncated_tool_call_count, 0);
+    assert.equal(iterRecords[0].tool_calls[0].result_truncated, false);
+  });
+});
+
+// --- #017 AC1: fixture SQLite DB with a running part + censored run -----------
+
+const nodeSqlite = (() => {
+  try { return createRequire(import.meta.url)('node:sqlite'); } catch { return null; }
+})();
+
+describe('readOpenCodeSession + censored run — fixture DB with in-flight part (#017)', () => {
+  it('reads a real DB carrying a running part; error/truncated counters split correctly',
+    { skip: nodeSqlite ? false : 'node:sqlite unavailable in this runtime' },
+    () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc017-db-'));
+      const dbPath = path.join(dir, 'opencode.db');
+      const db = new nodeSqlite.DatabaseSync(dbPath);
+      try {
+        db.exec(`
+          CREATE TABLE session (
+            id TEXT PRIMARY KEY, project_id TEXT, directory TEXT, title TEXT,
+            version TEXT, model TEXT, cost REAL,
+            tokens_input INTEGER, tokens_output INTEGER, tokens_reasoning INTEGER,
+            tokens_cache_read INTEGER, tokens_cache_write INTEGER,
+            time_created INTEGER, time_updated INTEGER
+          );
+          CREATE TABLE message (
+            id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT
+          );
+          CREATE TABLE part (
+            id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT,
+            time_created INTEGER, data TEXT
+          );
+        `);
+        const f = censoredRun();
+        const s = f.session;
+        db.prepare(
+          'INSERT INTO session (id, project_id, directory, title, version, model, cost, ' +
+          'tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, ' +
+          'tokens_cache_write, time_created, time_updated) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ).run(s.id, s.project_id, s.directory, s.title, s.version, s.model, s.cost,
+          s.tokens_input, s.tokens_output, s.tokens_reasoning, s.tokens_cache_read,
+          s.tokens_cache_write, s.time_created, s.time_updated);
+        const insMsg = db.prepare(
+          'INSERT INTO message (id, session_id, time_created, data) VALUES (?, ?, ?, ?)');
+        for (const m of f.messages) {
+          insMsg.run(m.id, m.session_id, m.time_created, JSON.stringify(m.data));
+        }
+        const insPart = db.prepare(
+          'INSERT INTO part (id, message_id, session_id, time_created, data) VALUES (?, ?, ?, ?, ?)');
+        for (const p of f.parts) {
+          insPart.run(p.id, p.message_id, p.session_id, p.time_created, JSON.stringify(p.data));
+        }
+      } finally {
+        db.close();
+      }
+
+      const session = readOpenCodeSession(dbPath);
+      assert.ok(session, 'reader returned null on the fixture DB');
+      assert.equal(session.messages.length, 5); // 1 user + 4 assistant
+
+      const { iterRecords, runSummary } = normalizeOpenCodeSession({
+        session: session.session, messages: session.messages, parts: session.parts,
+        runId: 'r-fixture-db', runStartedMs: 1780774001000,
+        runFinishedMs: 1780774008100, code: null, timeout: true, timeoutMs: 600000,
+      });
+
+      // The running write: truncated, not an error, workspace_changed unknown.
+      const tc = iterRecords[2].tool_calls[0];
+      assert.equal(tc.name, 'write');
+      assert.equal(tc.result_truncated, true);
+      assert.equal(tc.result_is_error, false);
+      assert.equal(tc.workspace_changed, null);
+      // Counters: only the genuinely errored edit counts as an error.
+      assert.equal(runSummary.error_tool_call_count, 1);
+      assert.equal(runSummary.truncated_tool_call_count, 1);
+      assert.equal(runSummary.workspace_changed_count, 0);
+      assert.equal(runSummary.terminal_status, 'timeout');
+      assert.equal(runSummary.censored, true);
+
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+});
+
+// --- #017 AC3: safe sqlite-CLI bind splicing ----------------------------------
+
+describe('buildSqliteCliArgs — safe sqlite-CLI fallback bind (#017)', () => {
+  const SQL = 'SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created, id;';
+
+  it("escapes single quotes and does NOT expand $-patterns ($&) in the bind", () => {
+    const args = buildSqliteCliArgs('/tmp/x.db', SQL, "ses_o'mal$&ley$'");
+    assert.deepEqual(args.slice(0, 3), ['-readonly', '-json', '/tmp/x.db']);
+    assert.equal(args.length, 4);
+    assert.equal(
+      args[3],
+      "SELECT id, data FROM message WHERE session_id = 'ses_o''mal$&ley$''' " +
+        'ORDER BY time_created, id;',
+    );
+    assert.ok(!args[3].includes('?'), 'placeholder must be consumed');
+  });
+
+  it('a plain session id binds as a simple quoted literal', () => {
+    const args = buildSqliteCliArgs('/db', SQL, 'ses_161992655ffepXKDFnnDPREdNF');
+    assert.match(args[3], /session_id = 'ses_161992655ffepXKDFnnDPREdNF' ORDER BY/);
+  });
+
+  it('no bind → SQL passed through untouched', () => {
+    const args = buildSqliteCliArgs('/db', 'SELECT * FROM session LIMIT 1;');
+    assert.equal(args[3], 'SELECT * FROM session LIMIT 1;');
+  });
+});
+
+// --- #017 AC2: one coercing numOrNull; strict variant distinctly named --------
+
+describe('strictNumOrNull vs the one coercing numOrNull (#017)', () => {
+  it("strictNumOrNull rejects non-numbers: '42' → null, '' → null, true → null", () => {
+    assert.equal(strictNumOrNull('42'), null);
+    assert.equal(strictNumOrNull(''), null);
+    assert.equal(strictNumOrNull(true), null);
+    assert.equal(strictNumOrNull(42), 42);
+    assert.equal(strictNumOrNull(NaN), null);
+    assert.equal(strictNumOrNull(null), null);
+  });
+  it('diverges deliberately from the coercing export in opencode_server_timings', () => {
+    assert.equal(coercingNumOrNull('42'), 42);
+    assert.notEqual(strictNumOrNull('42'), coercingNumOrNull('42'));
   });
 });
 

@@ -1,8 +1,14 @@
-// Issue #002: registry `config_id` dimension. Pins the four acceptance
-// criteria: the coarse bundle label is a required, enum-constrained schema
-// field; row assembly populates it from run context; existing claw runs
-// default to `claw-rig`; and validation accepts valid values while rejecting
-// out-of-enum and missing ones.
+// Issue #002: registry `config_id` dimension. Pins the acceptance criteria:
+// the coarse bundle label is a required, enum-constrained schema field; row
+// assembly populates it from run context; and validation accepts valid values
+// while rejecting out-of-enum and missing ones.
+//
+// Issue #009 (config_id provenance): assembleRow no longer defaults an absent
+// ctx.config_id to 'claw-rig' — it THROWS naming the field. The old default
+// let offline-recovered opencode runs get silently stamped as the historical
+// claw baseline and land on the wrong side of the A/B. 'claw-rig' stays in the
+// schema enum (preserved historical registries keep validating); it just can't
+// be minted by omission.
 
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,7 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { validateRow } from '../../lib/registry.js';
-import { assembleRow } from '../../lib/run_row.js';
+import { assembleRow, RunRowAssemblyError } from '../../lib/run_row.js';
 
 const tmpdirs = [];
 function makeTmp(prefix) {
@@ -68,13 +74,6 @@ function clawResult() {
 }
 
 describe('run-registry config_id dimension (issue #002)', () => {
-  it('defaults existing claw runs to claw-rig when ctx omits config_id', () => {
-    const manifestPath = writeManifest();
-    const row = assembleRow(clawResult(), baseCtx(manifestPath));
-    assert.equal(row.config_id, 'claw-rig');
-    assert.deepEqual(validateRow(row), []);
-  });
-
   it('threads an explicit config_id from run context', () => {
     const manifestPath = writeManifest();
     const row = assembleRow(clawResult(), baseCtx(manifestPath, { config_id: 'opencode-a' }));
@@ -82,9 +81,16 @@ describe('run-registry config_id dimension (issue #002)', () => {
     assert.deepEqual(validateRow(row), []);
   });
 
+  it('still accepts an EXPLICIT claw-rig (historical label stays in the enum)', () => {
+    const manifestPath = writeManifest();
+    const row = assembleRow(clawResult(), baseCtx(manifestPath, { config_id: 'claw-rig' }));
+    assert.equal(row.config_id, 'claw-rig');
+    assert.deepEqual(validateRow(row), []);
+  });
+
   it('accepts both enum values and rejects an out-of-enum value', () => {
     const manifestPath = writeManifest();
-    const row = assembleRow(clawResult(), baseCtx(manifestPath));
+    const row = assembleRow(clawResult(), baseCtx(manifestPath, { config_id: 'claw-rig' }));
 
     assert.deepEqual(validateRow({ ...row, config_id: 'claw-rig' }), []);
     assert.deepEqual(validateRow({ ...row, config_id: 'opencode-a' }), []);
@@ -98,12 +104,47 @@ describe('run-registry config_id dimension (issue #002)', () => {
 
   it('rejects a row missing config_id (required field)', () => {
     const manifestPath = writeManifest();
-    const row = assembleRow(clawResult(), baseCtx(manifestPath));
+    const row = assembleRow(clawResult(), baseCtx(manifestPath, { config_id: 'claw-rig' }));
     const { config_id, ...withoutConfigId } = row;
     const errs = validateRow(withoutConfigId);
     assert.ok(
       errs.some((e) => e.includes('missing required field: config_id')),
       `expected a missing-required error, got ${JSON.stringify(errs)}`,
     );
+  });
+});
+
+describe('config_id provenance: required, no claw-rig default (issue #009)', () => {
+  it('throws when ctx omits config_id, naming the field', () => {
+    const manifestPath = writeManifest();
+    assert.throws(
+      () => assembleRow(clawResult(), baseCtx(manifestPath)),
+      (err) => {
+        assert.ok(err instanceof RunRowAssemblyError, `expected RunRowAssemblyError, got ${err?.name}`);
+        assert.match(err.message, /config_id/, 'error message must name the missing field');
+        return true;
+      },
+    );
+  });
+
+  it('throws on null and empty-string config_id too (no silent fallthrough)', () => {
+    const manifestPath = writeManifest();
+    for (const bad of [null, '']) {
+      assert.throws(
+        () => assembleRow(clawResult(), baseCtx(manifestPath, { config_id: bad })),
+        /config_id/,
+        `config_id=${JSON.stringify(bad)} must throw`,
+      );
+    }
+  });
+
+  it('never mints claw-rig by omission: every assembled row carries the ctx label verbatim', () => {
+    const manifestPath = writeManifest();
+    for (const cid of ['opencode-a', 'opencode-a+git', 'opencode-a+prompt']) {
+      const row = assembleRow(clawResult(), baseCtx(manifestPath, { config_id: cid }));
+      assert.equal(row.config_id, cid);
+      assert.notEqual(row.config_id, 'claw-rig');
+      assert.deepEqual(validateRow(row), []);
+    }
   });
 });

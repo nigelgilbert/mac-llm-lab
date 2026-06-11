@@ -75,7 +75,9 @@ export function percentile(sortedAsc, q) {
 // Layer-A discipline: a run only enters a pass-rate denominator if it produced
 // a real pass/fail verdict. harness_error / interrupted rows carry passed===null
 // and must drop out (run_registry.schema.json terminal_status + passed docs).
-function isEligible(row) {
+// Exported (issue #012) so the verdict renderer (scripts/config-ab-verdict.mjs)
+// applies the exact same predicate instead of carrying a private copy.
+export function isEligible(row) {
   return (
     row != null &&
     typeof row.passed === 'boolean' &&

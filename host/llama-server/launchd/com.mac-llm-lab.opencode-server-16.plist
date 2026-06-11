@@ -19,7 +19,7 @@
 
       Distinct from the production claw plist AND the tier-64 OpenCode plist:
         - own Label + own port (:11437, vs claw :11435, LiteLLM :4000, opencode-64 :11436)
-        - --jinja + the corrected Qwen3.5 template (#018), NO claw.gbnf grammar
+        - --jinja + the corrected Qwen3.5 template (#018), NO grammar file
         - thinking-off via --chat-template-kwargs '{"enable_thinking":false}' (#017)
         - generous -n so tool-call args don't truncate
         - own log path, so it never clobbers claw's or opencode-64's log
@@ -29,6 +29,10 @@
       Placeholders (filled by `OPENCODE_TIER=16 opencode-server install`):
         __BINARY__ __GGUF_PATH__ __TEMPLATE_PATH__ __CTX_SIZE__ __BATCH_SIZE__
         __NPREDICT__ __TEMP__ __TOP_P__ __TOP_K__ __REPEAT_PENALTY__ __PRESENCE_PENALTY__
+      Port/host are deliberately NOT placeholders: the launchd identity is fixed
+      at the tier defaults (:11437 on 0.0.0.0), and `install` refuses
+      OPENCODE_LLAMA_PORT/HOST overrides pre-bootstrap (#005 render/poll parity).
+      Overrides remain available on the direct-boot `start` path.
     -->
 
     <key>ProgramArguments</key>
