@@ -28,8 +28,13 @@
 // can state "−5.5 pp, 90% CI [...]" instead of a bare point.
 //
 // Usage:
-//   node scripts/config-ab-normalized-ci.mjs <registry.jsonl> --tier 16 [--seed 0xc0ffee] [--B 10000]
+//   node scripts/config-ab-normalized-ci.mjs <registry.jsonl> --tier N [--seed 0xc0ffee] [--B 10000]
 //       [--treatment opencode-a] [--baseline claw-rig]
+//
+// --tier is REQUIRED (positive integer). Post-#021 this is the GENERAL
+// symmetric overflow-comparability tool, not a tier-16-only renderer — but an
+// omitted tier must not silently pool every tier in the registry under a
+// single heading, so there is no default.
 //
 // Exit codes: 0 on a successful render; 1 = statistic could not be computed
 // (PairedBootstrapError, e.g. no paired tasks); 2 = bad args.
@@ -52,8 +57,12 @@ function parseArgs(argv) {
     else if (!opts.registryPath) opts.registryPath = a[i];
     else { console.error(`unexpected arg: ${a[i]}`); process.exit(2); }
   }
-  if (!opts.registryPath) {
-    console.error('usage: config-ab-normalized-ci.mjs <registry.jsonl> --tier 16 [--seed N] [--B N] [--treatment ID] [--baseline ID]');
+  // --tier is required: without it the script would pool every tier in the
+  // registry while the heading names a single one. parseInt of a missing or
+  // non-numeric value yields NaN, so one finite-positive-integer check covers
+  // both the omitted and the malformed case.
+  if (!opts.registryPath || !Number.isFinite(opts.tier) || !Number.isInteger(opts.tier) || opts.tier <= 0) {
+    console.error('usage: config-ab-normalized-ci.mjs <registry.jsonl> --tier N [--seed N] [--B N] [--treatment ID] [--baseline ID]  (--tier required: positive integer)');
     process.exit(2);
   }
   for (const side of ['treatment', 'baseline']) {
@@ -72,7 +81,7 @@ function parseArgs(argv) {
 function main() {
   const { registryPath, tier, seed, B, treatment: TREATMENT, baseline: BASELINE } = parseArgs(process.argv);
   const all = readRegistry({ registryPath });
-  const rows = tier == null ? all : all.filter((r) => r.hardware_tier === tier);
+  const rows = all.filter((r) => r.hardware_tier === tier); // tier is required (parseArgs)
 
   // Reclassify: context-overflow harness_error → eligible fail, on BOTH sides
   // of the comparison (issue #021 — symmetric by construction, so a post-#002
@@ -101,7 +110,9 @@ function main() {
     `delta ${(ci.aggregateDelta * 100 >= 0 ? '+' : '')}${(ci.aggregateDelta * 100).toFixed(2)}pp  ` +
     `90% CI [${(ci.ci.lower * 100).toFixed(2)}, ${(ci.ci.upper * 100).toFixed(2)}]pp`;
 
-  console.log('=== tier-16 normalized-treatment sensitivity (post-hoc) ===');
+  // Templated with the actual tier: `--tier 16` must render the byte-identical
+  // committed string "tier-16" (the published repro outputs pin it).
+  console.log(`=== tier-${tier} normalized-treatment sensitivity (post-hoc) ===`);
   console.log(`registry      : ${registryPath}`);
   console.log(`bootstrap     : B=${B}  seed=0x${(seed >>> 0).toString(16)}`);
   console.log(`reclassified  : ${reclassified[BASELINE]} baseline (${BASELINE}) + ${reclassified[TREATMENT]} treatment (${TREATMENT}) context-overflow harness_error rows → eligible fails`);

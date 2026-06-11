@@ -67,6 +67,10 @@ describe('config-ab-normalized-ci.mjs — symmetric overflow normalization (issu
       assert.ok(!/^\s+at /m.test(res.stderr), `stderr has a stack trace:\n${res.stderr}`);
     });
 
+    it('heading is templated from --tier and renders the committed byte-identical string for tier 16', () => {
+      assert.match(res.stdout, /^=== tier-16 normalized-treatment sensitivity \(post-hoc\) ===$/m);
+    });
+
     it('reports baseline-side reclassification and ZERO treatment-side rows', () => {
       assert.match(
         res.stdout,
@@ -101,6 +105,25 @@ describe('config-ab-normalized-ci.mjs — symmetric overflow normalization (issu
   });
 
   describe('(c) arg validation and structured failure (parity with sibling renderers)', () => {
+    // --tier is REQUIRED (Copilot review on #021): without it the script used
+    // to pool ALL tiers under a hardcoded tier-16 heading. Spawn the script
+    // WITHOUT the runScript helper (which always injects --tier 16).
+    it('missing --tier exits 2 with the usage message (no tier default, no all-tier pooling)', () => {
+      const registry = path.join(FIXTURES, 'registry-overflow-baseline-only.jsonl');
+      const res = spawnSync(process.execPath, [SCRIPT, registry], { encoding: 'utf8' });
+      assert.equal(res.status, 2, `exit ${res.status}; stderr:\n${res.stderr}`);
+      assert.match(res.stderr, /usage: config-ab-normalized-ci\.mjs .*--tier required: positive integer/);
+      assert.ok(!/^\s+at /m.test(res.stderr), `stderr has a stack trace:\n${res.stderr}`);
+    });
+
+    it('non-numeric --tier exits 2 with the usage message', () => {
+      const registry = path.join(FIXTURES, 'registry-overflow-baseline-only.jsonl');
+      const res = spawnSync(process.execPath, [SCRIPT, registry, '--tier', 'sixteen'], { encoding: 'utf8' });
+      assert.equal(res.status, 2, `exit ${res.status}; stderr:\n${res.stderr}`);
+      assert.match(res.stderr, /usage: config-ab-normalized-ci\.mjs .*--tier required: positive integer/);
+      assert.ok(!/^\s+at /m.test(res.stderr), `stderr has a stack trace:\n${res.stderr}`);
+    });
+
     it('typo\'d --treatment exits 2 with the VALID_CONFIGS message, not a stack trace', () => {
       const res = runScript('registry-overflow-baseline-only.jsonl', ['--treatment', 'opencode-z']);
       assert.equal(res.status, 2, `exit ${res.status}; stderr:\n${res.stderr}`);

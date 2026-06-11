@@ -18,7 +18,8 @@
 #
 # Exits non-zero if any acceptance check fails. Boots a throwaway server on its
 # own PORT (default 18080) and tears it down on exit; it NEVER touches the
-# production claw llama-server on :11435.
+# resident opencode-server llama-server on :11436 (or any other tier port —
+# see host/llama-server/tiers.conf).
 # ============================================================================
 set -euo pipefail
 
@@ -69,7 +70,21 @@ cleanup() {
   fi
   SRV_PID=""
 }
-trap 'cleanup; rm -f "${RJSON:-}" "${POUT:-}"' EXIT
+# EXIT trap (#028 follow-up): the scratch renders are always removed, but the
+# server LOG is removed only on SUCCESS — on any failure it survives with its
+# path printed, since it is the primary diagnostic (boot errors, template
+# parse errors). Prior runs leaked one log per invocation into $TMPDIR.
+on_exit() {
+  rc=$?
+  cleanup
+  rm -f "${RJSON:-}" "${POUT:-}"
+  if [ "$rc" -eq 0 ]; then
+    rm -f "$LOG"
+  else
+    echo "server log kept for diagnostics: $LOG" >&2
+  fi
+}
+trap on_exit EXIT
 
 boot() { # $1 = template file
   cleanup

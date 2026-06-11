@@ -213,7 +213,12 @@ server_host_is_local() {
 }
 
 assert_server() {
-  if [[ "$SERVER_HOST" != "127.0.0.1" ]]; then
+  # Locality is decided by ONE predicate — server_host_is_local — for both
+  # the remote/local branch AND (by branch placement) the pairing check.
+  # Previously the branch tested `!= 127.0.0.1` while the pairing exemption
+  # used the helper, so OC_SERVER_HOST=localhost landed on the remote path
+  # yet was exempt from the pairing check (benign but asymmetric).
+  if ! server_host_is_local; then
     # Remote pairing check (#027): the health check below greens against the
     # REMOTE, but the container dials whatever baseURL is in the mounted
     # config. With a stock config that's host.docker.internal — i.e. the
@@ -221,7 +226,7 @@ assert_server() {
     # (possibly dead) server. The pairing requirement used to live only in
     # the header comment; now it's enforced. Runs BEFORE the health probe so
     # an unreachable OC_SERVER_HOST can't stall the failure.
-    if ! server_host_is_local && grep -q 'host\.docker\.internal' "$CONFIG_JSON"; then
+    if grep -q 'host\.docker\.internal' "$CONFIG_JSON"; then
       die3 "OC_SERVER_HOST=$SERVER_HOST is remote, but the resolved config still dials host.docker.internal (the LOCAL Mac):
   config: $CONFIG_JSON
   The health check would green against the remote while the agent container
@@ -232,6 +237,20 @@ assert_server() {
     green || die3 "remote server not green at http://$SERVER_HOST:$PORT/health
   oc cannot boot/lifecycle a remote server (OC_SERVER_HOST=$SERVER_HOST) —
   bring the tier daemon up on the serving Mac, then retry."
+    return 0
+  fi
+  if [[ "$SERVER_HOST" != "127.0.0.1" ]]; then
+    # Non-canonical loopback spelling (localhost, ::1, 127.x.y.z): the stock
+    # config's host.docker.internal still reaches this machine, so the
+    # pairing check above doesn't apply — but the lifecycle paths below
+    # (launchd daemon, opencode-server start/stop) are written against the
+    # default 127.0.0.1 host, so CONSERVATIVELY health-check only and never
+    # boot. This preserves the pre-unification outcome for these spellings
+    # (green -> proceed, red -> exit 3); only the message is more accurate.
+    green || die3 "server not green at http://$SERVER_HOST:$PORT/health
+  OC_SERVER_HOST=$SERVER_HOST is a non-canonical loopback spelling — oc only
+  boots/lifecycles tier servers for the default 127.0.0.1. Bring the tier
+  server up yourself, or unset OC_SERVER_HOST."
     return 0
   fi
   [[ -x "$SERVER_SCRIPT" ]] || die3 "opencode-server script missing: $SERVER_SCRIPT"

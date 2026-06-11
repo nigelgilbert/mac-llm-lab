@@ -52,6 +52,11 @@ step_61_main() {
   if [ "$topo" = "client-only" ]; then
     ohost=$(state_get OPENCODE_HOST 2>/dev/null || printf 'mac-llm-lab.local')
     oport=$(state_get OPENCODE_PORT 2>/dev/null || step_61_default_port)
+    if [ -z "$oport" ]; then
+      fail "could not determine LAN opencode server port (no OPENCODE_PORT in state, and the tier table gave no default)"
+      info "debug: ./wizard/wizard doctor   and host/llama-server/tiers.conf"
+      return 1
+    fi
     if ! curl -fsS --max-time 4 "http://${ohost}:${oport}/health" >/dev/null 2>&1; then
       warn "SKIPPED: LAN opencode server not reachable at http://${ohost}:${oport}/health"
       info "client install is complete; bring the serving Mac's tier daemon up"
@@ -64,7 +69,7 @@ step_61_main() {
   # --- 1. injection assertion (deterministic, no model needed) --------------
   act "oc probe — asserting the global prompt reaches the agent system prompt"
   if "$oc" probe; then
-    ok "injection PASS (wire capture saw the AGENTS.md attribution line)"
+    ok "injection PASS (wire capture saw the planted prompt sentinel)"
   else
     fail "injection probe FAILED — a fresh install must not ship a null prompt"
     info "debug: ls -l ~/.config/opencode/AGENTS.md ; ${oc} status"

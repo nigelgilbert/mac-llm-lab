@@ -226,6 +226,27 @@ case "$HOST_REG" in
   "$CLAW_RT_DIR"/*) : ;;
   *) err "REGISTRY_OUT must be a path under $CLAW_RT_DIR (gitignored runtime root; visible through the path-matched repo mount); got: $HOST_REG" ;;
 esac
+# #020 residual: the textual checks above still accept a SYMLINK under the
+# runtime root that points OUTSIDE it (e.g. .claw-runtime/escape -> /tmp/x).
+# Physically resolve the runtime root and the registry path's PARENT directory
+# (the file itself may not exist yet — fresh mode requires exactly that) and
+# prefix-check the RESOLVED paths. macOS bash 3.2: no realpath/readlink -f —
+# `cd -P ... && pwd -P` in the $() subshell is the portable physical resolve.
+# A not-yet-existing parent is mkdir'd first: the emit path (lib/registry.js)
+# creates the registry's parent recursively anyway, so creating it here matches
+# the driver's existing flow — and the '..' + textual prefix checks above
+# already passed, so the mkdir target is textually under the runtime root.
+[ ! -L "$HOST_REG" ] || err "REGISTRY_OUT must not be a symlink (a link under $CLAW_RT_DIR could smuggle registry rows outside the gitignored runtime root); got: $HOST_REG"
+HOST_REG_PARENT="$(dirname "$HOST_REG")"
+mkdir -p "$HOST_REG_PARENT" || err "cannot create REGISTRY_OUT parent directory: $HOST_REG_PARENT"
+CLAW_RT_PHYS="$(cd -P "$CLAW_RT_DIR" 2>/dev/null && pwd -P)" \
+  || err "cannot physically resolve runtime root $CLAW_RT_DIR (containment check needs it)"
+HOST_REG_PARENT_PHYS="$(cd -P "$HOST_REG_PARENT" 2>/dev/null && pwd -P)" \
+  || err "cannot physically resolve REGISTRY_OUT parent directory $HOST_REG_PARENT (containment check needs it)"
+case "$HOST_REG_PARENT_PHYS" in
+  "$CLAW_RT_PHYS" | "$CLAW_RT_PHYS"/*) : ;;
+  *) err "REGISTRY_OUT must PHYSICALLY resolve under $CLAW_RT_DIR (a symlink under the runtime root must not escape it; the REUSE_ROWS protections rest on this containment); got: $HOST_REG (parent resolves to $HOST_REG_PARENT_PHYS)" ;;
+esac
 if [ "$REUSE_ROWS" = 1 ]; then
   # Reuse mode: BASELINE (and pairing) may come from rows already in the file.
   [ -s "$HOST_REG" ] || err "REUSE_ROWS=1 appends to existing rows — set REGISTRY_OUT to an existing non-empty registry under $CLAW_RT_DIR; got empty/missing: $HOST_REG"

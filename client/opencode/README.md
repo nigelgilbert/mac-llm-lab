@@ -36,9 +36,10 @@ otherwise self-update past the image's pinned `OPENCODE_VERSION` mid-session.
 claw-code compiles `claw` from Rust source in a `rust:bookworm` builder stage.
 OpenCode ships prebuilt, platform-specific binaries via the `opencode-ai` npm
 package (the right one — e.g. `opencode-linux-arm64` — is pulled in as an
-optionalDependency), so this is a single `debian:bookworm-slim` stage that just
-`npm install -g opencode-ai@<version>`. Same base + Node-via-nodesource
-convention as claw-code. `rlwrap` is dropped (claw wraps a line REPL; OpenCode
+optionalDependency), so this is a single `node:<major>-bookworm-slim` stage that
+just `npm install -g opencode-ai@<version>`. The official pinned Node base
+replaces the old Node-via-nodesource convention (supply-chain hardening: no
+fetched install script at build time). `rlwrap` is dropped (claw wraps a line REPL; OpenCode
 has its own TUI), and `libssl3` is no longer installed explicitly (claw needs it
 for its Rust binary) — though nodejs still pulls it in transitively.
 
