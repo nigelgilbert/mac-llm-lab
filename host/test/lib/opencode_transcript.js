@@ -49,7 +49,11 @@ import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { joinServerTimings, writeServerTimingsSidecar } from './opencode_server_timings.js';
+import {
+  joinServerTimings,
+  writeServerTimingsSidecar,
+  findContextOverflowMarker,
+} from './opencode_server_timings.js';
 
 const SCHEMA_VERSION = 1;
 
@@ -220,6 +224,12 @@ function withParsedData(row) {
  * @param {number|null} [o.code]         Agent exit code (null on timeout).
  * @param {boolean}     [o.timeout=false]
  * @param {number}      [o.timeoutMs]
+ * @param {object|null} [o.contextOverflow]  #002: the context-overflow marker
+ *   scanned out of this run's server-log capture window (shape from
+ *   opencode_server_timings.scanContextOverflow), or null. When present and
+ *   the run did NOT finish clean, the run_summary is re-typed
+ *   terminal_status 'harness_error' (Layer-A: serving artifact, not a model
+ *   capability failure) so the emitted row drops out of pass denominators.
  * @returns {{ iterRecords: object[], runSummary: object }}
  */
 export function normalizeOpenCodeSession({
@@ -232,6 +242,7 @@ export function normalizeOpenCodeSession({
   code = null,
   timeout = false,
   timeoutMs = null,
+  contextOverflow = null,
 }) {
   // Assistant message = one iteration; user message is skipped. Ordered by the
   // DB read (time_created, id); re-sort defensively in case caller reordered.
@@ -438,6 +449,7 @@ export function normalizeOpenCodeSession({
 
   const runSummary = buildRunSummary({
     session, runId, runStartedMs, runFinishedMs, code, timeout, timeoutMs,
+    contextOverflow,
     iterRecords, totals, toolElapsedSeen, maxInputTokens, toolCallCountTotal,
     workspaceChangedCount, resultChangedCount, noProgressRepeatCount,
     errorToolCallCount, truncatedToolCallCount, unmappedToolCallCount,
@@ -449,6 +461,7 @@ export function normalizeOpenCodeSession({
 
 function buildRunSummary({
   session, runId, runStartedMs, runFinishedMs, code, timeout, timeoutMs,
+  contextOverflow = null,
   iterRecords, totals, toolElapsedSeen, maxInputTokens, toolCallCountTotal,
   workspaceChangedCount, resultChangedCount, noProgressRepeatCount,
   errorToolCallCount, truncatedToolCallCount, unmappedToolCallCount,
@@ -456,6 +469,19 @@ function buildRunSummary({
 }) {
   const empty = iterRecords.length === 0;
   const join_status = empty ? 'empty_session' : 'n/a_opencode';
+
+  // #002 Layer-A relabel (Option A, decision 2026-06-10): a mid-run llama-server
+  // context overflow (the pinned `send_error … exceeds the available context
+  // size` line inside this run's capture window) on a run that did NOT finish
+  // clean is a serving artifact, not a model capability failure — re-type it
+  // 'harness_error' so run_row/pickPassed emit passed=null and
+  // paired_bootstrap.isEligible drops the row from pass denominators. A run
+  // that overflowed but still exited 0 RECOVERED (client compaction/retry):
+  // the overflow is recorded (context_overflow: true) but the run keeps its
+  // honest 'done' label and the workspace oracle decides pass/fail.
+  const rawTerminalStatus = timeout ? 'timeout' : (code === 0 ? 'done' : 'error');
+  const overflowed = !!contextOverflow;
+  const overflowRelabel = overflowed && rawTerminalStatus !== 'done';
 
   const timing_caveats = [
     // §4.2.1 — honest about the session log itself, regardless of the #022 gate.
@@ -490,6 +516,20 @@ function buildRunSummary({
   }
   if (empty) {
     timing_caveats.push('empty_session: no assistant messages in the DB.');
+  }
+  if (overflowRelabel) {
+    timing_caveats.push(
+      'context_overflow_relabel: llama-server rejected a request in this ' +
+      "run's capture window (n_ctx exceeded) — terminal_status re-typed " +
+      'harness_error / passed null per #002 Layer-A (excluded from pass ' +
+      `denominators). Oracle line: ${contextOverflow.line ?? 'n/a'}`,
+    );
+  } else if (overflowed) {
+    timing_caveats.push(
+      'context_overflow_recovered: an n_ctx-exceeded rejection appeared in ' +
+      "this run's capture window but the run finished clean (exit 0) — " +
+      'recorded, NOT re-typed (#002); the workspace oracle decides pass/fail.',
+    );
   }
 
   // Prefer the session row's own rollups (authoritative); fall back to the
@@ -554,10 +594,21 @@ function buildRunSummary({
     truncated_tool_call_count: truncatedToolCallCount,
     // Additive vs claw.
     unmapped_tool_call_count: unmappedToolCallCount,
-    terminal_status: timeout ? 'timeout' : (code === 0 ? 'done' : 'error'),
+    // #002: overflow re-types a non-clean run 'harness_error' (see relabel
+    // block above); run_row.js's summary-precedence path carries it onto the
+    // registry row, where pickPassed forces passed=null.
+    terminal_status: overflowRelabel ? 'harness_error' : rawTerminalStatus,
     passed: null,
     timeout: !!timeout,
-    context_overflow: false,
+    // #002: true iff the pinned llama-server overflow line was scanned out of
+    // this run's capture window (in-run detection; the driver's post-arm
+    // host-slice patch sets the same fields for freeze-blinded runs).
+    context_overflow: overflowed,
+    ...(overflowRelabel ? { harness_error: 'context_overflow' } : {}),
+    ...(overflowed ? {
+      context_overflow_detected_via: 'in_run_capture',
+      context_overflow_line: contextOverflow.line ?? null,
+    } : {}),
     exit_code: code,
     join_status,
     censored: !!timeout,
@@ -615,11 +666,21 @@ export function buildOpenCodeArtifacts({
   const session = readSession(dbPath);
   if (!session) return null; // no DB / unreadable → caller degrades to outcome_only
 
+  // #002: the runner's captureServerTimings rides the overflow signal back on
+  // the serverTimings array as a marker record (the array is the only
+  // runner→transcript channel). Detection is therefore coupled to
+  // OPENCODE_SERVER_TIMINGS=1 by design (decision doc's soft dependency on
+  // #007): flag off → no capture window → no in-run overflow typing.
+  const contextOverflow = serverTimingsEnabled
+    ? findContextOverflowMarker(serverTimings)
+    : null;
+
   const { iterRecords: baseRecords, runSummary } = normalizeOpenCodeSession({
     session: session.session,
     messages: session.messages,
     parts: session.parts,
     runId, runStartedMs, runFinishedMs, code, timeout, timeoutMs,
+    contextOverflow,
   });
 
   // #022 ordinal join (k-th server timing → k-th iteration). Lazily imported so

@@ -336,6 +336,66 @@ export function parseServerLogTimings(text) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// #002 context-overflow oracle — the llama-server n_ctx-exceeded log line.
+// ---------------------------------------------------------------------------
+
+// Pinned EMPIRICALLY against the lab's pinned llama-server build `b1-5594d13`
+// (2026-06-10: throwaway host server, Qwen3-8B-Q4_K_M, -c 256, port 18123;
+// an over-context /v1/chat/completions returned HTTP 400
+// `exceed_context_size_error` and the log carried exactly):
+//
+//   srv    send_error: task id = 0, error: request (728 tokens) exceeds the available context size (256 tokens), try increasing it
+//
+// This pre-decode rejection is THE overflow signal on this build: a mid-decode
+// ceiling does NOT error (verified same probe — the server caps the prediction
+// and returns finish_reason 'length', HTTP 200, no error line). Captures:
+// [1] task id, [2] request tokens, [3] n_ctx. The task id is NOT correlatable
+// to an iteration (a rejected request produces no timing block), so attribution
+// is window-based: an overflow line inside a run's capture window belongs to
+// that run (single-client topology; see docs/OPENCODE-SERVER-TIMINGS.md §#002).
+export const CONTEXT_OVERFLOW_RE =
+  /srv\s+send_error: task id = (-?\d+), error: request \((\d+) tokens\) exceeds the available context size \((\d+) tokens\), try increasing it/;
+
+/**
+ * Scan server-log text for the pinned context-overflow line. Returns the FIRST
+ * match (one overflow in a window is enough to type the run) or null.
+ * @param {string} text
+ * @returns {{ line: string, task_id: number|null, n_prompt_tokens: number|null,
+ *             n_ctx: number|null } | null}
+ */
+export function scanContextOverflow(text) {
+  if (!text) return null;
+  for (const raw of String(text).split('\n')) {
+    const m = raw.match(CONTEXT_OVERFLOW_RE);
+    if (!m) continue;
+    return {
+      line: raw.trim(),
+      task_id: numOrNull(m[1]),
+      n_prompt_tokens: numOrNull(m[2]),
+      n_ctx: numOrNull(m[3]),
+    };
+  }
+  return null;
+}
+
+/**
+ * #002 marker predicate: a context-overflow marker record riding the
+ * `serverTimings` array (the only channel from the runner's capture to the
+ * transcript build — same transport as the #007 `log_unreadable` marker).
+ * `joinServerTimings` filters these out of the timing population;
+ * `findContextOverflowMarker` is how the transcript side picks the signal up.
+ */
+export function isContextOverflowMarker(rec) {
+  return !!rec && rec.signal === 'context_overflow';
+}
+
+/** @returns {object|null} the first overflow marker in a captured array. */
+export function findContextOverflowMarker(records) {
+  if (!Array.isArray(records)) return null;
+  return records.find(isContextOverflowMarker) ?? null;
+}
+
 /**
  * Convenience: read a run's log slice via its cursor and parse it.
  *
@@ -389,7 +449,27 @@ export function captureServerTimings(cursor, opts = {}) {
       }
     }
   }
-  return parseServerLogTimings(text);
+  const records = parseServerLogTimings(text);
+  // #002: scan the SAME slice text for the pinned context-overflow line and
+  // ride the signal back on the records array as a marker (the array is the
+  // only runner→transcript channel; same transport as log_unreadable above).
+  // Detection therefore shares the capture window AND the capture flag with
+  // the timings: flag off → no cursor → no in-run overflow typing (the
+  // driver's post-arm host-slice scan is the flag-on frozen-window backstop).
+  const overflow = scanContextOverflow(text);
+  if (overflow) {
+    console.error(
+      `[opencode_server_timings] context-overflow line in this run's capture ` +
+      `window (task id ${overflow.task_id}, ${overflow.n_prompt_tokens} tokens ` +
+      `> n_ctx ${overflow.n_ctx}) — #002 relabel will type this run harness_error.`,
+    );
+    records.push({
+      source: 'llama_server_log',
+      signal: 'context_overflow',
+      ...overflow,
+    });
+  }
+  return records;
 }
 
 /**
@@ -617,7 +697,11 @@ export function joinServerTimings(iterations, timings, opts = {}) {
 
   const rawTims = Array.isArray(timings) ? timings : [];
   const markers = rawTims.filter(isLogUnreadableMarker);
-  const tims = rawTims.filter((t) => !isLogUnreadableMarker(t));
+  // #002 overflow markers are signal transport, not timing records: drop them
+  // from the join population so n_timings / join_status stay truthful.
+  const tims = rawTims.filter(
+    (t) => !isLogUnreadableMarker(t) && !isContextOverflowMarker(t),
+  );
 
   const blankAll = () => iters.map((it) => ({ ...it, ...blankServerFields() }));
 

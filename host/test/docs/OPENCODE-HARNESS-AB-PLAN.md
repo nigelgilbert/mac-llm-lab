@@ -96,6 +96,22 @@ Adoption is a stopping decision; commit the rule **before** seeing data.
   `timeoutMs` to any `runner`, so per-task wall-clock is equal by construction. **No
   imposed iteration cap** on either side — iteration count is native-harness behavior;
   **record it, don't gate on it** (KISS).
+- **Eligibility — context overflow (UPDATED 2026-06-10, issue #002, Option A,
+  lab owner):** a mid-run llama-server context overflow is re-typed
+  `terminal_status: 'harness_error'` / `passed: null` and **excluded from
+  pass-rate denominators** (`paired_bootstrap.isEligible`), restoring the
+  Sprint-1.20 Layer-A taxonomy for the opencode-native stack. Oracle: the
+  server's own n_ctx-exceeded log line in the run's per-run capture window
+  (pinned against build `b1-5594d13`; mechanism + attribution rule in
+  [OPENCODE-SERVER-TIMINGS.md](OPENCODE-SERVER-TIMINGS.md) §"#002
+  context-overflow detection"). **This is a semantics change relative to the
+  published oc verdicts** — OPENCODE-AB-TIER16-VERDICT counted overflows as
+  eligible model failures ("0 oc `harness_error`"); see the dated note there.
+  Two caveats: (1) re-typing rides `OPENCODE_SERVER_TIMINGS=1` — flag-off
+  sweeps have no capture window and keep the old overflow-counts-as-eligible
+  semantics, so comparison sweeps must run flag-on; (2) future published
+  comparisons are opencode-vs-opencode only (claw-rig rows replication-only),
+  so the convention is symmetric by construction.
 
 ---
 

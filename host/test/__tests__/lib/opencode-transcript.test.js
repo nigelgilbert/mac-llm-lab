@@ -695,3 +695,101 @@ describe('readOpenCodeSession + normalize — real #020 evidence DB (gated)', ()
       assert.equal(runSummary.model_id, 'llama-local/opencode');
     });
 });
+
+// --- #002: context-overflow → Layer-A relabel in the sidecar -------------------
+
+describe('#002 context overflow — sidecar relabel (Option A, decision 2026-06-10)', () => {
+  // Shape produced by opencode_server_timings.scanContextOverflow over the
+  // empirically pinned llama-server line (build b1-5594d13, 2026-06-10).
+  const OVERFLOW_MARKER = {
+    source: 'llama_server_log',
+    signal: 'context_overflow',
+    line: 'srv    send_error: task id = 3, error: request (728 tokens) exceeds the available context size (256 tokens), try increasing it',
+    task_id: 3,
+    n_prompt_tokens: 728,
+    n_ctx: 256,
+  };
+
+  it('overflow + timeout (the documented tier-16 shape) → harness_error / passed null', () => {
+    const f = happyRun();
+    const { runSummary } = normalizeOpenCodeSession({
+      ...f, runId: 'r-ovf-t', runStartedMs: 1, runFinishedMs: 2,
+      code: null, timeout: true, contextOverflow: OVERFLOW_MARKER,
+    });
+    assert.equal(runSummary.terminal_status, 'harness_error');
+    assert.equal(runSummary.passed, null);
+    assert.equal(runSummary.context_overflow, true);
+    assert.equal(runSummary.harness_error, 'context_overflow');
+    assert.equal(runSummary.context_overflow_detected_via, 'in_run_capture');
+    assert.match(runSummary.context_overflow_line, /exceeds the available context size/);
+    assert.ok(runSummary.timing_caveats.some((c) => c.startsWith('context_overflow_relabel:')));
+  });
+
+  it('overflow + non-zero exit → harness_error / passed null', () => {
+    const f = happyRun();
+    const { runSummary } = normalizeOpenCodeSession({
+      ...f, runId: 'r-ovf-e', runStartedMs: 1, runFinishedMs: 2,
+      code: 1, contextOverflow: OVERFLOW_MARKER,
+    });
+    assert.equal(runSummary.terminal_status, 'harness_error');
+    assert.equal(runSummary.passed, null);
+    assert.equal(runSummary.harness_error, 'context_overflow');
+  });
+
+  it('recovered-run carve-out: overflow + clean exit 0 stays done (recorded, not re-typed)', () => {
+    const f = happyRun();
+    const { runSummary } = normalizeOpenCodeSession({
+      ...f, runId: 'r-ovf-d', runStartedMs: 1, runFinishedMs: 2,
+      code: 0, contextOverflow: OVERFLOW_MARKER,
+    });
+    assert.equal(runSummary.terminal_status, 'done');
+    assert.equal(runSummary.context_overflow, true);
+    assert.equal(runSummary.harness_error, undefined);
+    assert.ok(runSummary.timing_caveats.some((c) => c.startsWith('context_overflow_recovered:')));
+  });
+
+  it('no marker → context_overflow false, no overflow fields (unchanged shape)', () => {
+    const f = happyRun();
+    const { runSummary } = normalizeOpenCodeSession({
+      ...f, runId: 'r-clean', runStartedMs: 1, runFinishedMs: 2, code: 1,
+    });
+    assert.equal(runSummary.terminal_status, 'error');
+    assert.equal(runSummary.context_overflow, false);
+    assert.equal(runSummary.harness_error, undefined);
+    assert.equal(runSummary.context_overflow_detected_via, undefined);
+  });
+
+  it('buildOpenCodeArtifacts: a marker on serverTimings (flag on) relabels the ON-DISK sidecar', () => {
+    const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-ovf-'));
+    const meta = buildOpenCodeArtifacts({
+      dbPath: '/evidence.db', runDir, runId: 'r-ovf-disk', runStartedMs: 1,
+      runFinishedMs: 2, code: null, timeout: true,
+      readSession: () => happyRun(),
+      serverTimings: [OVERFLOW_MARKER], serverTimingsEnabled: true,
+    });
+    assert.ok(meta);
+    const summary = JSON.parse(fs.readFileSync(meta.runSummaryPath, 'utf8'));
+    assert.equal(summary.terminal_status, 'harness_error');
+    assert.equal(summary.passed, null);
+    assert.equal(summary.harness_error, 'context_overflow');
+    assert.equal(summary.context_overflow_detected_via, 'in_run_capture');
+    // The marker is signal transport, not a timing record: the join sees zero
+    // timing blocks, not a phantom one.
+    assert.equal(summary.server_timings_join_status, 'no_server_timings');
+    fs.rmSync(runDir, { recursive: true, force: true });
+  });
+
+  it('buildOpenCodeArtifacts: flag OFF ignores a stray marker (overflow typing rides the flag)', () => {
+    const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-ovf-off-'));
+    const meta = buildOpenCodeArtifacts({
+      dbPath: '/evidence.db', runDir, runId: 'r-ovf-off', runStartedMs: 1,
+      runFinishedMs: 2, code: null, timeout: true,
+      readSession: () => happyRun(),
+      serverTimings: [OVERFLOW_MARKER], serverTimingsEnabled: false,
+    });
+    const summary = JSON.parse(fs.readFileSync(meta.runSummaryPath, 'utf8'));
+    assert.equal(summary.terminal_status, 'timeout');
+    assert.equal(summary.context_overflow, false);
+    fs.rmSync(runDir, { recursive: true, force: true });
+  });
+});

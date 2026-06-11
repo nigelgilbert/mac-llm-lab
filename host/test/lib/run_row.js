@@ -99,11 +99,17 @@ export function assembleRow(clawResult, ctx) {
   const start_time = isoFromMs(summary?.run_started_ms);
   const end_time = isoFromMs(summary?.run_finished_ms);
 
-  // Sprint 1.20: if claw exited non-zero AND the per-run bridge slice carries a
-  // typed context-overflow failure from LiteLLM, relabel as harness_error so
-  // the row drops out of pass-rate denominators per the schema's Layer-A
-  // discipline (run_registry.schema.json's `terminal_status` description).
-  const upstreamFailure = detectUpstreamFailure(clawResult.runDir);
+  // #002 (Option A, decision 2026-06-10): a mid-run llama-server context
+  // overflow is re-typed harness_error so the row drops out of pass-rate
+  // denominators per the schema's Layer-A discipline (run_registry.schema.json
+  // `terminal_status` description). The signal is the sidecar's
+  // `context_overflow` flag, set from the pinned llama-server n_ctx-exceeded
+  // log line in the run's capture window — by the transcript build in-run
+  // (lib/opencode_transcript.js, OPENCODE_SERVER_TIMINGS=1) or by the driver's
+  // post-arm host-slice patch (scripts/patch-context-overflow.mjs) when
+  // virtiofs froze the in-container view. This replaces the retired claw-era
+  // bridge-slice detector (its LiteLLM-side writers died with the claw stack).
+  const upstreamFailure = detectContextOverflow(summary);
 
   const terminal_status = pickTerminalStatus(clawResult, summary, upstreamFailure);
   const passed = pickPassed(assertion, summary, terminal_status);
@@ -182,20 +188,15 @@ function isoFromMs(ms) {
 }
 
 function pickTerminalStatus(clawResult, summary, upstreamFailure) {
-  // Sprint 1.20: a claw exit-non-zero attributable to a typed upstream failure
-  // (e.g. llama-server context-overflow rejection surfaced as LiteLLM
-  // BadRequestError) is harness-side, not test-content. Relabel before the
-  // generic 'error' bucketing so Layer-A pass-rate denominators stay clean.
-  //
-  // Gate on claw exit != 0: a transient upstream failure that claw recovered
-  // from (e.g. mid-run BadRequestError followed by a successful retry → claw
-  // exits 0) is not a harness failure of the run; only kill-the-run failures
-  // get the harness_error label.
-  if (upstreamFailure
-      && !clawResult.timeout
-      && !clawResult.signal
-      && typeof clawResult.code === 'number'
-      && clawResult.code !== 0) {
+  // #002: a typed upstream failure (llama-server context overflow in the run's
+  // capture window) is harness-side, not test-content. Relabel before the
+  // generic bucketing so Layer-A pass-rate denominators stay clean. The
+  // recovered-run carve-out (overflow line present but the run finished clean
+  // → NOT a kill-the-run failure → no relabel) lives in detectContextOverflow,
+  // so a non-null upstreamFailure here is always relabel-worthy — including
+  // the documented tier-16 shape where the overflow burns the wall-clock and
+  // the sidecar says 'timeout' (the claw-era exit-code gate would miss it).
+  if (upstreamFailure) {
     return 'harness_error';
   }
   if (summary?.terminal_status && TERMINAL_STATUS_ALLOWED.has(summary.terminal_status)) {
@@ -214,41 +215,27 @@ function pickPassed(assertion, summary, terminal_status) {
   return null;
 }
 
-// Sprint 1.20: per-run upstream-failure detector. Reads the bridge slice
-// (the retired claw runner copied the time-windowed _bridge.jsonl segment
-// into <runDir>/bridge.iterations.jsonl) and types the failure from LiteLLM's
-// callback metadata captured by host/litellm/callbacks/iter_distribution_logger.py.
+// #002 per-run context-overflow detector (Option A, decision 2026-06-10).
+// Reads the run_summary sidecar's `context_overflow` flag — the opencode-native
+// successor to the retired claw-era bridge-slice detector (which parsed
+// LiteLLM failure classes out of the per-run bridge slice; its writers died
+// with the claw stack, tag claw-stack-final). The flag's oracle is the pinned
+// llama-server n_ctx-exceeded log line scanned out of the run's per-run
+// capture window (lib/opencode_server_timings.js CONTEXT_OVERFLOW_RE), set by:
+//   - the in-run transcript build when the window was readable in-container
+//     (context_overflow_detected_via: 'in_run_capture'), or
+//   - the driver's post-arm host-slice patch when virtiofs froze the
+//     in-container view (context_overflow_detected_via: 'host_slice_post_arm';
+//     scripts/patch-context-overflow.mjs, run-config-ab.sh).
 //
-// Patterns:
-//   - context_overflow: BadRequestError + message including
-//     "exceeds the available context size" — n_ctx ceiling at llama-server.
-// Future: other failure_class patterns get their own harness_error label here.
+// Recovered-run carve-out: an overflow line in the window on a run that still
+// finished clean ('done') means the client recovered (compaction/retry) — the
+// overflow is recorded on the sidecar but the run is NOT a kill-the-run
+// failure, so no relabel (the workspace oracle decides pass/fail).
 //
-// Returns null when no record is typed; otherwise { harness_error: 'context_overflow' }.
-function detectUpstreamFailure(runDir) {
-  if (!runDir) return null;
-  const slicePath = path.join(runDir, 'bridge.iterations.jsonl');
-  if (!fs.existsSync(slicePath)) return null;
-  for (const line of fs.readFileSync(slicePath, 'utf8').split('\n')) {
-    const t = line.trim();
-    if (!t) continue;
-    let rec;
-    try { rec = JSON.parse(t); } catch { continue; }
-    if (!rec.stream_aborted) continue;
-    // BadRequestError → llama-server's typed pre-decode rejection.
-    // InternalServerError / APIError → same root cause surfaced as a
-    // streaming "Context size has been exceeded" mid-decode (observed in
-    // Sprint 1.20 N=8 confirm, expression-eval at 64k). Both are upstream-
-    // bound context-overflow; relabel both as harness_error.
-    if (typeof rec.failure_message_tail !== 'string') continue;
-    if (rec.failure_class === 'BadRequestError'
-        && rec.failure_message_tail.includes('exceeds the available context size')) {
-      return { harness_error: 'context_overflow' };
-    }
-    if ((rec.failure_class === 'InternalServerError' || rec.failure_class === 'APIError')
-        && rec.failure_message_tail.includes('Context size has been exceeded')) {
-      return { harness_error: 'context_overflow' };
-    }
-  }
-  return null;
+// Returns null when no relabel applies; otherwise { harness_error: 'context_overflow' }.
+function detectContextOverflow(summary) {
+  if (!summary || summary.context_overflow !== true) return null;
+  if (summary.terminal_status === 'done') return null; // recovered, not killed
+  return { harness_error: 'context_overflow' };
 }

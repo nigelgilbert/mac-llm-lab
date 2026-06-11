@@ -103,6 +103,44 @@ const HOST_DATA_SUBDIR = 'opencode-data';
 const TRANSCRIPT_DISABLED = process.env.OPENCODE_TRANSCRIPT_DISABLED === '1';
 
 /**
+ * #015 disk hygiene: delete a run's per-run DB capture dir (opencode-data/:
+ * SQLite DB + -wal/-shm + logs + git snapshot trees, ~1.1 MB/run) once
+ * normalization has succeeded — the sidecars (iterations.jsonl,
+ * run_summary.json, server.timings.jsonl) now carry everything downstream
+ * reads, and nothing in the lab reads the raw DB after buildOpenCodeArtifacts
+ * returns non-null. Without this every sweep accretes ~1 GB/1000 runs
+ * (measured: 1,310 dirs / 962 MB at review time).
+ *
+ * Safety rails:
+ *   - refuses (returns false) unless the path's basename is exactly
+ *     'opencode-data', so a caller bug can never delete a runDir or sidecars;
+ *   - best-effort: a prune failure logs and returns false — it can NEVER fail
+ *     the run (the sidecars are already on disk);
+ *   - the caller only invokes this on the non-degraded path (meta non-null).
+ *     Degraded (outcome_only) runs RETAIN opencode-data/ as the debugging
+ *     oracle — that retention is the policy, not an accident.
+ *
+ * Exported for the unit tests and for scripts/prune-opencode-data.mjs's
+ * backlog sweep (same deletion primitive, same basename guard).
+ *
+ * @param {string} dataDir  <runDir>/opencode-data
+ * @returns {boolean} true iff the dir is gone (deleted or already absent)
+ */
+export function pruneOpenCodeDataDir(dataDir) {
+  if (!dataDir || path.basename(dataDir) !== HOST_DATA_SUBDIR) {
+    console.error(`[runOpenCode] prune refused: ${dataDir} is not an ${HOST_DATA_SUBDIR}/ dir`);
+    return false;
+  }
+  try {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    return true;
+  } catch (e) {
+    console.error(`[runOpenCode] prune of ${dataDir} failed (run unaffected): ${e.message}`);
+    return false;
+  }
+}
+
+/**
  * Build the `docker compose ... run` argv. Exported for unit testing — it is a
  * pure function of its inputs.
  *
@@ -351,6 +389,17 @@ export function runOpenCode({
           console.error(`[runOpenCode] transcript normalize failed for ${runId}: ${e.stack || e.message}`);
           meta = null;
         }
+      }
+
+      // #015: normalization succeeded → the sidecars carry the telemetry and
+      // the raw DB capture has served its purpose; prune it (policy in
+      // docs/OPENCODE-WORKSPACE-CONTRACT.md). Guarded: pruneOpenCodeDataDir
+      // never throws, so a prune hiccup can't fail the run. Every degraded
+      // path (meta null → outcome_only sidecar below) RETAINS opencode-data/
+      // as the debugging oracle. OPENCODE_KEEP_DATA=1 is the field escape
+      // hatch when the raw DB of a *successful* run is needed.
+      if (meta && dataDir && process.env.OPENCODE_KEEP_DATA !== '1') {
+        pruneOpenCodeDataDir(dataDir);
       }
 
       // No usable transcript (exec seam, opt-out, or absent/partial DB) → write

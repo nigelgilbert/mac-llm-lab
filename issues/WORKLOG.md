@@ -217,4 +217,61 @@ Committed as T2.
 Launched in parallel: #002 (overflow relabel, log-line oracle) · #015
 (runtime disk hygiene).
 
-(awaiting agent reports)
+### T3 agent results — both ✅ complete
+
+- **#002 (overflow → harness_error, Option A as decided)**: oracle pinned
+  empirically from a throwaway tiny-context llama-server (build
+  b1-5594d13): `srv send_error: ... request (N tokens) exceeds the
+  available context size (M tokens)`; negative finding — mid-decode
+  ceiling returns finish_reason 'length' with NO error line, so
+  pre-decode rejection is the only signal. Detection rides
+  OPENCODE_SERVER_TIMINGS=1 (documented): in-run, captureServerTimings
+  scans the slice and a marker rides the serverTimings channel →
+  transcript relabels the sidecar BEFORE row emit
+  (`harness_error:'context_overflow'`, passed null, provenance fields);
+  post-arm PRE-GATE, the driver now slices EVERY fresh runDir (T2
+  carry-forward adopted) and `patch-context-overflow.mjs scan-and-patch`
+  patches run_summary + the emitted registry row for freeze-blinded runs
+  (idempotent, atomic, foreign rows byte-identical, OVERFLOW_RC → exit
+  2). detectUpstreamFailure + bridge-slice path deleted; relabel now
+  unconditional on a typed overflow (the old exit≠0 gate would have
+  missed the tier-16 timeout shape). Semantics-change notes dated into
+  OPENCODE-AB-TIER16-VERDICT + AB-PLAN §0b.
+- **#015 (disk hygiene)**: prune predicate = run_summary parses ∧
+  telemetry === 'transcript' ∧ iterations.jsonl exists; runner-side hook
+  after successful normalization (OPENCODE_KEEP_DATA=1 escape hatch;
+  degraded/interrupted runs retain); backlog one-shot
+  `prune-opencode-data.mjs` (dry-run default): **1,316 of 1,325 dirs
+  pruned, 779.9 MiB freed, du 971M → 34M**, runDir count and all
+  sidecars/slices byte-identical. Rotation:
+  `rotate-opencode-server-log.sh` (cap 50 MB, 8 MB tail → .1,
+  copytruncate verified safe under launchd's O_APPEND fd), guards:
+  sweep-label containers, fresh ticker index (<30 min), resident-lock
+  mutex; live demo under lock (lowered cap) with post-rotation append
+  verified. NO LaunchAgent (TOCTOU vs sweep start) — manual
+  between-sweeps; driver-preflight rotation recommended to #016.
+
+### T3 boundary verification (orchestrator)
+
+- Full suite on the stable tree: **281 tests / 280 pass / 1 skip / 0
+  fail** (T2 close was 234/233/1/0).
+- Combined-tree flag-on smoke (the #002 agent's green sweep predated
+  #015's prune hook): first attempt died to the known ENOENT /workspace
+  flake (audit named the lost cell, sweep red — correct); retry green:
+  `1 sliced, 0 frozen, 0 repaired, 0 overflow-typed`, join_status ok
+  (in-place rung — no repair needed this time), 7 timing rows, telemetry
+  'transcript', and the runDir holds sidecars + server-log.slice with NO
+  opencode-data/ — prune verified in the live pipeline.
+- Coherence: prune retains everything the repair/patch passes read
+  (sidecars, slice, registry untouched); overflow patch runs pre-gate;
+  rotation guards include the same sweep-label and ticker-index markers
+  the driver creates. No file-ownership violations in the diff.
+
+Committed as T3.
+
+## T4 — started 2026-06-11
+
+Launched: #010 (Layer-A tool-call gate, measurement-first per recorded
+decision).
+
+(awaiting agent report)

@@ -89,6 +89,53 @@ Notes / invariants:
 - **Claw side is unchanged.** `CONFIG` unset → `claw-rig`; no `HOST_WORKSPACE`,
   no socket, no path-matching needed (the agent is in-process).
 
+## Runtime disk hygiene (#015): what is kept, what is pruned, when
+
+The per-run sidecar root (`client/opencode/.opencode-runtime/<runId>/`) holds
+two classes of artifact with opposite retention policies:
+
+**Kept forever (the analysis record — NEVER pruned by anything):**
+
+| artifact | written by | consumer |
+| --- | --- | --- |
+| `iterations.jsonl` | `buildOpenCodeArtifacts` (or empty, outcome-only path) | run_row.js / harvester |
+| `run_summary.json` | `buildOpenCodeArtifacts` or the outcome-only sidecar | run_row.js / harvester |
+| `assertion_result.json` | registry reporter | harvester |
+| `server.timings.jsonl` | #022/#007 timings join (flag-on runs) | report (#016) |
+| `server-log.slice` | #007 host-slice repair | #002 overflow oracle, re-joins |
+
+**Pruned (the raw per-run DB capture):** `<runId>/opencode-data/` — the
+bind-mounted OpenCode SQLite data dir (DB + `-wal`/`-shm` + logs + git
+snapshot trees, ~1.1 MB/run, and `du`-wise several× that in block overhead
+from the snapshot trees' many small files).
+
+- **When:** at run end, by `runOpenCode` itself (lib/opencode.js
+  `pruneOpenCodeDataDir`), immediately after `buildOpenCodeArtifacts` returns
+  non-null — i.e. the sidecars now carry everything downstream reads; nothing
+  in the lab reads the raw DB after successful normalization.
+- **Retained on every degraded path:** when normalization returns null /
+  throws (wedged or killed run, absent/partial DB, caller-aborted
+  `interrupted` run, spawn failure) the runner writes the outcome-only
+  sidecar (`run_summary.telemetry: 'outcome_only'`) and `opencode-data/` is
+  **kept** — there it is the only debugging oracle.
+- **Escape hatch:** `OPENCODE_KEEP_DATA=1` skips the end-of-run prune (when
+  the raw DB of a *successful* run is needed for debugging).
+- **Safety:** the deletion primitive refuses any path whose basename is not
+  exactly `opencode-data`, and a prune failure logs + continues — it can
+  never fail the run.
+- **Backlog:** `scripts/prune-opencode-data.mjs` applies the same predicate
+  (`run_summary.telemetry === 'transcript'` + `iterations.jsonl` present →
+  prune; anything else → retain) over an existing runtime root. Dry-run by
+  default; `--apply` to delete. 2026-06-10 backlog run: 1,316 captures
+  pruned, ~780 MiB apparent / `du` 971M → 34M, runDir count unchanged, all
+  sidecars intact.
+
+The resident llama-server log (`/tmp/opencode-llama-server.log`) has its own
+guarded rotation — see "Resident log rotation" in
+[OPENCODE-SERVER-TIMINGS.md](OPENCODE-SERVER-TIMINGS.md) (it must never fire
+mid-sweep; byte-offset cursors and the host-slice index depend on the log
+being append-only within a sweep).
+
 ## Proof
 
 [scripts/opencode-workspace-roundtrip.mjs](../scripts/opencode-workspace-roundtrip.mjs)

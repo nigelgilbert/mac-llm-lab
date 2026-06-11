@@ -31,6 +31,10 @@ import {
   writeServerTimingsSidecar,
   summarizeServerTimings,
   renderServerDecodeSplit,
+  CONTEXT_OVERFLOW_RE,
+  scanContextOverflow,
+  isContextOverflowMarker,
+  findContextOverflowMarker,
 } from '../../lib/opencode_server_timings.js';
 
 const tmpdirs = [];
@@ -852,5 +856,98 @@ describe('captureServerTimings virtiofs-freeze relay fallback', () => {
     );
     assert.equal(recs.length, 1);
     assert.equal(called, false);
+  });
+});
+
+// --- #002 context-overflow oracle ---------------------------------------------
+// The fixture lines are EMPIRICAL: captured 2026-06-10 from a throwaway host
+// llama-server (pinned lab build b1-5594d13, Qwen3-8B-Q4_K_M, -c 256, port
+// 18123) rejecting an over-context /v1/chat/completions (HTTP 400,
+// type exceed_context_size_error). Byte-exact, including the srv/slot noise
+// around the oracle line. Same capture is pinned as the patch-script fixture
+// (__tests__/scripts/fixtures/overflow-server-log.slice).
+const OVERFLOW_LOG_REAL = `srv  params_from_: Chat format: peg-native
+slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = -1
+srv  get_availabl: updating prompt cache
+slot launch_slot_: id  2 | task 3 | processing task, is_child = 0
+slot update_slots: id  2 | task 3 | new prompt, n_ctx_slot = 256, n_keep = 0, task.n_tokens = 728
+srv    send_error: task id = 3, error: request (728 tokens) exceeds the available context size (256 tokens), try increasing it
+slot      release: id  2 | task 3 | stop processing: n_tokens = 0, truncated = 0
+srv  update_slots: no tokens to decode
+srv  update_slots: all slots are idle
+`;
+
+describe('#002 context-overflow oracle — pinned llama-server line (build b1-5594d13)', () => {
+  it('CONTEXT_OVERFLOW_RE matches the empirically captured line, byte-exact', () => {
+    const line = 'srv    send_error: task id = 0, error: request (728 tokens) exceeds the available context size (256 tokens), try increasing it';
+    const m = line.match(CONTEXT_OVERFLOW_RE);
+    assert.ok(m, 'pinned oracle line must match');
+    assert.equal(m[1], '0');   // task id
+    assert.equal(m[2], '728'); // request tokens
+    assert.equal(m[3], '256'); // n_ctx
+  });
+
+  it('does NOT match timing blocks, release lines, or a healthy log', () => {
+    assert.equal(scanContextOverflow(LOG_TWO_REQUESTS), null);
+    assert.equal(scanContextOverflow('srv  update_slots: all slots are idle\n'), null);
+    assert.equal(scanContextOverflow(''), null);
+    assert.equal(scanContextOverflow(null), null);
+  });
+
+  it('scanContextOverflow extracts task id / request tokens / n_ctx from the real capture', () => {
+    const hit = scanContextOverflow(OVERFLOW_LOG_REAL);
+    assert.ok(hit);
+    assert.equal(hit.task_id, 3);
+    assert.equal(hit.n_prompt_tokens, 728);
+    assert.equal(hit.n_ctx, 256);
+    assert.match(hit.line, /^srv\s+send_error: task id = 3/);
+  });
+
+  it('captureServerTimings appends ONE overflow marker after the parsed blocks', () => {
+    const tmp = makeTmp('oc-overflow-');
+    const p = path.join(tmp, 'server.log');
+    // A run window holding one healthy timing block AND an overflow rejection.
+    fs.writeFileSync(p, LOG_TWO_REQUESTS + OVERFLOW_LOG_REAL);
+    const recs = captureServerTimings({ path: p, byteStart: 0, byteEnd: fs.statSync(p).size });
+    assert.equal(recs.length, 3); // 2 timing blocks + 1 marker
+    const marker = findContextOverflowMarker(recs);
+    assert.ok(marker);
+    assert.equal(marker.signal, 'context_overflow');
+    assert.equal(marker.source, 'llama_server_log');
+    assert.equal(marker.task_id, 3);
+    assert.equal(marker.n_ctx, 256);
+    assert.ok(isContextOverflowMarker(marker));
+    assert.equal(recs.filter(isContextOverflowMarker).length, 1);
+  });
+
+  it('no overflow in the window → no marker (clean capture unchanged)', () => {
+    const tmp = makeTmp('oc-no-overflow-');
+    const p = path.join(tmp, 'server.log');
+    fs.writeFileSync(p, LOG_TWO_REQUESTS);
+    const recs = captureServerTimings({ path: p, byteStart: 0, byteEnd: fs.statSync(p).size });
+    assert.equal(recs.length, 2);
+    assert.equal(findContextOverflowMarker(recs), null);
+  });
+
+  it('joinServerTimings filters the marker out of the timing population', () => {
+    const iters = [
+      { iter: 1, input_tokens: 23, output_tokens: 18, reasoning_tokens: 0 },
+      { iter: 2, input_tokens: 4, output_tokens: 42, reasoning_tokens: 0 },
+    ];
+    const tims = parseServerLogTimings(LOG_TWO_REQUESTS);
+    const withMarker = [...tims, { source: 'llama_server_log', signal: 'context_overflow', line: 'srv send_error…' }];
+    const join = joinServerTimings(iters, withMarker, { enabled: true });
+    assert.equal(join.join_status, 'ok');          // marker did not demote the join
+    assert.equal(join.n_timings, 2);               // marker not counted as a timing
+    assert.equal(join.n_unmatched_timings, 0);     // nor as an unmatched block
+    assert.equal(join.iterations[0].server_decode_ms, 440.69);
+  });
+
+  it('a marker-only capture (overflow, zero timing blocks) joins as no_server_timings', () => {
+    const iters = [{ iter: 1, input_tokens: 23, output_tokens: 18, reasoning_tokens: 0 }];
+    const onlyMarker = [{ source: 'llama_server_log', signal: 'context_overflow' }];
+    const join = joinServerTimings(iters, onlyMarker, { enabled: true });
+    assert.equal(join.join_status, 'no_server_timings');
+    assert.equal(join.n_timings, 0);
   });
 });

@@ -212,6 +212,24 @@ already < 0. **KEEP is robust to the eligibility convention.** (Honestly stated:
 canonical −7.7 pp slightly overstates the gap; the defensible reading is "OpenCode
 is worse by roughly 5.5–7.7 pp on the 9B," and either end fails non-inferiority.)
 
+> **SEMANTICS CHANGE — 2026-06-10 (issue #002, Option A, lab owner).** The
+> asymmetry described above is now CLOSED going forward: the harness re-types a
+> mid-run llama-server context overflow as `terminal_status: 'harness_error'` /
+> `passed: null` for **opencode runs too**, detected from the server's own
+> n_ctx-exceeded log line in the run's per-run capture window
+> (docs/OPENCODE-SERVER-TIMINGS.md §"#002 context-overflow detection"; oracle
+> pinned against build `b1-5594d13`). This is a **semantics change relative to
+> THIS published verdict**: the "0 oc `harness_error`" above counted overflows
+> as eligible model failures. The numbers on this page are NOT restated — they
+> remain the pre-registered §0b treatment over the dataset named above — but
+> they are **not directly comparable** to future flag-on sweeps without the
+> sensitivity normalization (scripts/config-ab-normalized-ci.mjs). Future
+> published comparisons are opencode-vs-opencode only (claw-rig rows are
+> replication-only evidence), so the new convention is symmetric by
+> construction there. Caveat: overflow re-typing rides
+> `OPENCODE_SERVER_TIMINGS=1` (no capture window on flag-off sweeps — those
+> retain this page's old semantics).
+
 ## Rule 0a.2 — wall-clock → **MET** (near-parity)
 
 Median wall-clock per side (end_time − start_time, all 256 runs; eligible-only median

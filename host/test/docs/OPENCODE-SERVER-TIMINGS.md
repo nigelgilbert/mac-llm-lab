@@ -97,9 +97,91 @@ and only the last is authoritative under the freeze:
    `assertion_result.json`, or the registry.
 
 **`server-log.slice` is retained** as the canonical per-run server-log
-artifact: the #002 overflow detection greps the same file. The repair is
-best-effort per runDir — a failed repair leaves the honest
-`no_server_timings` artifacts in place and never reddens the sweep.
+artifact, and since #002 landed the driver slices **every** fresh runDir
+post-arm (not just freeze-signature ones), so the #002 overflow scan has an
+artifact for every flag-on run. The timings repair itself is best-effort per
+runDir — a failed repair leaves the honest `no_server_timings` artifacts in
+place and never reddens the sweep (a failed #002 overflow *patch* does — see
+the context-overflow section below).
+
+### #002 context-overflow detection (rides this plumbing)
+
+**Decision (issue #002, Option A, lab owner 2026-06-10):** a mid-run
+llama-server context overflow is a serving artifact, not a model capability
+failure — the run is re-typed `terminal_status: 'harness_error'` /
+`passed: null` and `paired_bootstrap.isEligible` drops it from pass-rate
+denominators (Layer-A discipline). The oracle is the server's own log line,
+pinned **empirically against the lab's pinned build `b1-5594d13`**
+(2026-06-10 throwaway probe: Qwen3-8B-Q4_K_M, `-c 256`, port 18123,
+over-context `/v1/chat/completions` → HTTP 400 `exceed_context_size_error`):
+
+```
+srv    send_error: task id = 0, error: request (728 tokens) exceeds the available context size (256 tokens), try increasing it
+```
+
+Pinned as `CONTEXT_OVERFLOW_RE` in
+[lib/opencode_server_timings.js](../lib/opencode_server_timings.js) (captures
+task id / request tokens / n_ctx) with the byte-exact capture as fixture
+(`__tests__/scripts/fixtures/overflow-server-log.slice`). On this build the
+pre-decode rejection is the **only** overflow signal: a mid-decode ceiling
+does *not* error — the server caps the prediction and returns
+`finish_reason: 'length'`, HTTP 200, no log line (verified on the same
+probe). Such truncated-but-completed runs are NOT re-typed.
+
+**FLAG COUPLING (protocol — read this):** overflow detection rides
+`OPENCODE_SERVER_TIMINGS=1` — the same cursor/slice plumbing (the #002
+decision's soft dependency on #007). **Overflow re-typing only applies on
+flag-on sweeps.** On a flag-off sweep there is no capture window and a
+mid-run overflow lands as an eligible model failure (timeout/error), exactly
+like the published oc verdicts. Run comparison sweeps flag-on.
+
+Two detection layers, both feeding the same sidecar fields:
+
+1. **In-run** (`captureServerTimings` → transcript): the run's slice text is
+   scanned alongside the timing parse; a hit rides back on the captured
+   records array as a marker (`{ signal: 'context_overflow', line, task_id,
+   … }` — filtered out of the join population) and the transcript build
+   re-types `run_summary.json` BEFORE the reporter emits the row:
+   `terminal_status: 'harness_error'`, `passed: null`,
+   `context_overflow: true`, `harness_error: 'context_overflow'`,
+   `context_overflow_detected_via: 'in_run_capture'`,
+   `context_overflow_line`, plus a `context_overflow_relabel: …` caveat.
+2. **Post-arm, PRE-GATE patch** (`run-config-ab.sh` →
+   [scripts/patch-context-overflow.mjs](../scripts/patch-context-overflow.mjs)):
+   the in-run layer is blind when the virtiofs freeze emptied the in-place
+   slice OR the run wedged hard enough to leave only an outcome-only sidecar
+   (no transcript build). Post-arm the driver slices every fresh runDir from
+   the HOST log and scans each slice; a hit patches `run_summary.json` (same
+   fields, `context_overflow_detected_via: 'host_slice_post_arm'`) **and the
+   already-emitted registry row** — `terminal_status → 'harness_error'`,
+   `passed → null`, `harness_error → 'context_overflow'`, within schema
+   fields only (`run_registry.schema.json` is `additionalProperties: false`,
+   so the patch provenance lives on the sidecar, reachable from the row via
+   `trace_artifact_uri`/`run_id`). The patch is idempotent, logged loud
+   naming the run, and runs strictly BEFORE the row audit and pairing gate
+   read the registry. A patch that *fails* (not "no overflow") exits the
+   sweep with code 2 — the relabel is promised on flag-on sweeps and must
+   not silently not-happen.
+
+**Attribution rule:** a rejected request produces no timing block, so the
+overflow line's task id has no within-run anchor — attribution is
+window-based: **an overflow line inside a run's capture window belongs to
+that run** (single-client topology; the only other in-window traffic is the
+run's own title/summarize requests). The host-slice window pads one tick
+(~3 s) on each side, so an adjacent run's overflow line can in principle
+land in the pad; the misattribution risk is conservative — it can only move
+a FAILED neighbor into the excluded bucket (the recovered-run carve-out
+keeps clean-finishing runs labeled `done`), never flip pass/fail.
+
+**Recovered-run carve-out:** an overflow line in the window of a run that
+still exited 0 means the client recovered (compaction/retry) — the sidecar
+records `context_overflow: true` plus a `context_overflow_recovered: …`
+caveat but the run keeps `done` and the workspace oracle decides pass/fail.
+
+**Semantics change vs published verdicts:** see the dated notes in
+[OPENCODE-AB-TIER16-VERDICT.md](OPENCODE-AB-TIER16-VERDICT.md) and
+[OPENCODE-HARNESS-AB-PLAN.md](OPENCODE-HARNESS-AB-PLAN.md) — the published oc
+verdicts counted overflows as eligible failures ("0 oc `harness_error`").
 
 ### Log path resolution (#007)
 
@@ -246,6 +328,39 @@ const md = renderServerDecodeSplit(
 when no side has data; otherwise a markdown table of prompt-eval / decode / server-
 total per side. This satisfies the #016 AC "server-decode timing is omitted unless
 built (not implied)".
+
+## Resident log rotation (#015) — never mid-sweep
+
+The tier-64 launchd plist appends to `/tmp/opencode-llama-server.log` forever.
+Rotation exists (`host/llama-server/scripts/rotate-opencode-server-log.sh`,
+50 MB cap, copytruncate-style: last 8 MB → `<log>.1`, then `: >` the live
+file — safe under launchd's O_APPEND fd, verified live), but it interacts
+with everything above: the log cursor brackets runs by **byte offsets**, the
+host ticker index maps wall-clock → **byte offsets**, and `server-log.slice`
+is extracted from those offsets. A truncation mid-sweep silently corrupts all
+three. Therefore:
+
+- **No newsyslog entry, no timer** that can fire mid-sweep, and no LaunchAgent
+  ships for it (a `StartInterval` agent can still TOCTOU-race a sweep that
+  starts between guard check and truncate).
+- The script **refuses (exit 2)** when: sweep containers exist
+  (`docker ps --filter label=mac-llm-lab.sweep`, docker-unreachable also
+  refuses), any `.claw-runtime/server-log-index.*.txt` has mtime within 30 min
+  (covers between-cells gaps and a just-finished sweep's repair pass), or the
+  resident lock `/tmp/oc-resident.lock.d` cannot be acquired
+  (`OC_ROTATE_HOLDING_LOCK=1` when the invoker already holds it).
+- **Invocation expectation:** manual, between sweeps (`--dry-run` to check);
+  a driver-preflight rotation — rotate *before* any cursor opens — is the
+  recommended automation point (handed to #016, which owns the driver).
+- Within-run consistency is unaffected: the cursor only needs the file stable
+  **within** a run, and any cursor opened after a rotation sees consistent
+  (smaller) offsets. `readLogSlice` already tolerates a start-past-EOF as an
+  empty slice.
+
+Retention policy for the per-run artifacts themselves (sidecars kept forever,
+`opencode-data/` pruned after successful normalization) lives in
+[OPENCODE-WORKSPACE-CONTRACT.md](OPENCODE-WORKSPACE-CONTRACT.md) §"Runtime
+disk hygiene".
 
 ## Tests
 

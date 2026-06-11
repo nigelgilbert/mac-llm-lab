@@ -74,7 +74,9 @@
 #
 # Exit code (#003): nonzero if ANY phase failed; precedence when several did:
 #   1 = arm sub-phase failure (a cell rc'd nonzero or a sub-phase wedged)
-#   2 = row shortfall (expected-attempts diff found missing/over-emitted cells)
+#   2 = registry accountability failure: row shortfall (expected-attempts diff
+#       found missing/over-emitted cells) OR a #002 overflow relabel that
+#       could not be applied (the gate would read a mis-typed eligible row)
 #   3 = pairing-gate failure
 # (Preflight/setup errors exit 1 via err() before any phase runs.)
 #
@@ -102,14 +104,24 @@
 #              READ-ONLY at /var/log/opencode-llama-server.log and point
 #              OPENCODE_LLAMA_LOG at it. ALSO arms the host-slice repair pass:
 #              a host-side ticker indexes the log's size every ~3s during each
-#              arm, and post-arm any fresh runDir that closed with the
-#              virtiofs-freeze signature (server_timings_join_status
-#              'no_server_timings') gets its run window re-sliced FROM THE
-#              HOST log (host processes always see truth) into
-#              <runDir>/server-log.slice and re-joined via
-#              scripts/repair-server-timings.mjs. Unset/0 (default): no mount,
-#              no env, no ticker, no slice files — exactly the flag-off
-#              behavior.
+#              arm; post-arm EVERY fresh runDir gets its run window sliced
+#              FROM THE HOST log (host processes always see truth) into
+#              <runDir>/server-log.slice (#002 carry-forward: unconditional,
+#              so the overflow scan has an artifact for every run). RunDirs
+#              that closed with the virtiofs-freeze signature
+#              (server_timings_join_status 'no_server_timings') are re-joined
+#              via scripts/repair-server-timings.mjs. ALSO arms the #002
+#              context-overflow pass: every slice is scanned for the pinned
+#              llama-server n_ctx-exceeded line and a hit re-types the run
+#              harness_error/passed=null in BOTH run_summary AND the
+#              already-emitted registry row (scripts/
+#              patch-context-overflow.mjs; idempotent; runs strictly BEFORE
+#              the row audit + pairing gate read the registry). Unset/0
+#              (default): no mount, no env, no ticker, no slice files, no
+#              overflow typing — exactly the flag-off behavior. NOTE
+#              (protocol): #002 overflow re-typing therefore only applies on
+#              flag-on sweeps — flag-off sweeps count a mid-run overflow as
+#              an eligible model failure (docs/OPENCODE-SERVER-TIMINGS.md).
 #
 # Examples:
 #   # one-cell smoke of the default arm on the resident tier-64 daemon:
@@ -416,41 +428,48 @@ stop_timings_ticker() {
   fi
 }
 
-# Post-arm repair: for each runDir this arm produced (run_summary.json newer
-# than the arm-start stamp) that closed with the freeze signature
-# (server_timings_join_status 'no_server_timings'), map its wall-clock window
-# to a host-log byte window via the tick index (window rule lives in
-# scripts/repair-server-timings.mjs — floor/ceil to the bracketing ticks, pad
-# one tick each side; the title request fires ~at run start so the leading pad
-# matters), extract the slice HOST-SIDE (truth even mid-freeze), and re-join
-# inside the runner image (no node on the host). Best-effort per runDir: a
-# failed repair leaves the honest 'no_server_timings' artifacts in place and
-# never reddens the sweep.
-repair_arm_timings() {
-  local rs rd window sb eb winsz eof_sz n_repaired=0 n_frozen=0
-  local summaries
+# Post-arm capture pass: for EACH runDir this arm produced (run_summary.json
+# newer than the arm-start stamp):
+#   1. SLICE (unconditional, #002): map its wall-clock window to a host-log
+#      byte window via the tick index (window rule lives in
+#      scripts/repair-server-timings.mjs — floor/ceil to the bracketing ticks,
+#      pad one tick each side; the title request fires ~at run start so the
+#      leading pad matters) and extract it HOST-SIDE (truth even mid-freeze)
+#      into <runDir>/server-log.slice — the retained canonical per-run
+#      server-log artifact, so the #002 overflow scan has one for EVERY run,
+#      frozen or not, transcript or outcome-only.
+#   2. TIMINGS REPAIR (freeze signature only, #007 — unchanged semantics):
+#      re-join via scripts/repair-server-timings.mjs. Best-effort per runDir:
+#      a failed repair leaves the honest 'no_server_timings' artifacts in
+#      place and never reddens the sweep.
+#   3. OVERFLOW SCAN (#002, every sliced runDir): scan the slice for the
+#      pinned llama-server n_ctx-exceeded line; a hit re-types the run
+#      harness_error/passed=null in run_summary AND the already-emitted
+#      registry row (scripts/patch-context-overflow.mjs — idempotent, loud,
+#      provenance on the sidecar). Runs per-arm, i.e. strictly BEFORE the row
+#      audit + pairing gate read the registry. A FAILED patch (not "no
+#      overflow") sets OVERFLOW_RC=1 → sweep exits 2: the relabel is promised
+#      on flag-on sweeps and must not silently not-happen.
+post_arm_capture_pass() {
+  local rs rd window sb eb winsz eof_sz n_sliced=0 n_repaired=0 n_frozen=0 n_overflow=0
+  local summaries oc_out
   summaries="$(find "$OC_RT_ROOT" -mindepth 2 -maxdepth 2 -name run_summary.json -newer "$ARM_STAMP" 2>/dev/null || true)"
   if [ -z "$summaries" ]; then
-    log "[timings-repair] no fresh runDirs since arm start — nothing to inspect"
+    log "[post-arm] no fresh runDirs since arm start — nothing to inspect"
     return 0
   fi
   for rs in $summaries; do
     rd="$(dirname "$rs")"
-    # Freeze signature only. run_summary.json is JSON.stringify(_, null, 2),
-    # so the field sits alone on its line — grep is exact here. Outcome-only
-    # sidecars carry no server_timings_join_status and are skipped (nothing
-    # to repair: no transcript, no iterations to join).
-    grep -q '"server_timings_join_status": "no_server_timings"' "$rs" || continue
-    n_frozen=$((n_frozen + 1))
+    # ---- 1. slice (every fresh runDir) ------------------------------------
     eof_sz="$(stat -f %z "$HOST_LLAMA_LOG" 2>/dev/null || echo 0)"
     window="$(docker run --rm -v "$REPO_DIR:$REPO_DIR" -w "$REPO_DIR/host/test" \
       --entrypoint node "$RUNNER_IMAGE" scripts/repair-server-timings.mjs window \
       --run-dir "$rd" --index "$TIMINGS_INDEX" --eof "$eof_sz")" \
-      || { log "[timings-repair] window mapping FAILED for $rd (see node error above) — leaving as captured"; continue; }
+      || { log "WARNING: [post-arm] OVERFLOW-SCAN-GAP $rd — window mapping FAILED (see node error above): no slice, no overflow scan; if this run overflowed its row is mis-typed (#002)"; continue; }
     sb="${window%% *}"
     eb="${window##* }"
     case "${sb}${eb}" in
-      ''|*[!0-9]*) log "[timings-repair] bad window '$window' for $rd — leaving as captured"; continue ;;
+      ''|*[!0-9]*) log "WARNING: [post-arm] OVERFLOW-SCAN-GAP $rd — bad window '$window': no slice, no overflow scan"; continue ;;
     esac
     winsz=$((eb - sb))
     # HOST-side extraction: tail/head on the host log (host view is truth).
@@ -461,16 +480,40 @@ repair_arm_timings() {
     else
       : > "$rd/server-log.slice"
     fi
-    if docker run --rm -v "$REPO_DIR:$REPO_DIR" -w "$REPO_DIR/host/test" \
-        --entrypoint node "$RUNNER_IMAGE" scripts/repair-server-timings.mjs repair \
-        --run-dir "$rd"; then
-      n_repaired=$((n_repaired + 1))
-      log "[timings-repair] repaired $rd via host slice [$sb,$eb) (${winsz} bytes of $HOST_LLAMA_LOG)"
+    n_sliced=$((n_sliced + 1))
+    # ---- 2. timings repair (freeze signature only) -------------------------
+    # run_summary.json is JSON.stringify(_, null, 2), so the field sits alone
+    # on its line — grep is exact here. Outcome-only sidecars carry no
+    # server_timings_join_status and are skipped (nothing to re-join: no
+    # transcript, no iterations) — they still got step 1's slice and get
+    # step 3's overflow scan.
+    if grep -q '"server_timings_join_status": "no_server_timings"' "$rs"; then
+      n_frozen=$((n_frozen + 1))
+      if docker run --rm -v "$REPO_DIR:$REPO_DIR" -w "$REPO_DIR/host/test" \
+          --entrypoint node "$RUNNER_IMAGE" scripts/repair-server-timings.mjs repair \
+          --run-dir "$rd"; then
+        n_repaired=$((n_repaired + 1))
+        log "[timings-repair] repaired $rd via host slice [$sb,$eb) (${winsz} bytes of $HOST_LLAMA_LOG)"
+      else
+        log "[timings-repair] repair FAILED for $rd — 'no_server_timings' artifacts left as captured"
+      fi
+    fi
+    # ---- 3. #002 overflow scan (every sliced runDir) -----------------------
+    if oc_out="$(docker run --rm -v "$REPO_DIR:$REPO_DIR" -w "$REPO_DIR/host/test" \
+        --entrypoint node "$RUNNER_IMAGE" scripts/patch-context-overflow.mjs scan-and-patch \
+        --run-dir "$rd" --registry "$HOST_REG")"; then
+      case "$oc_out" in
+        *'"overflow":true'*)
+          n_overflow=$((n_overflow + 1))
+          log "[overflow-patch] $rd: $oc_out"
+          ;;
+      esac
     else
-      log "[timings-repair] repair FAILED for $rd — 'no_server_timings' artifacts left as captured"
+      log "ERROR: [overflow-patch] FAILED for $rd ($oc_out) — a context-overflow row may be entering the gate as an eligible failure; sweep will exit 2 (#002)"
+      OVERFLOW_RC=1
     fi
   done
-  log "[timings-repair] arm summary: $n_frozen frozen runDir(s), $n_repaired repaired via host slice"
+  log "[post-arm] arm summary: $n_sliced runDir(s) sliced, $n_frozen frozen, $n_repaired repaired, $n_overflow overflow-typed (OVERFLOW_RC=$OVERFLOW_RC)"
 }
 
 # Per-sweep shared workspace H, emptied IN PLACE. We deliberately do NOT
@@ -501,6 +544,9 @@ log "    shared workspace H = $H"
 # is deliberately UNSET so the emit path auto-picks the (arm, tier) serving
 # fingerprint via modelConfigIdFor(); an explicit value would defeat that.
 ARMS_RC=0
+# #002: set by post_arm_capture_pass when an overflow relabel could not be
+# applied to the registry (NOT by "no overflow found"). Folded into exit 2.
+OVERFLOW_RC=0
 for ARM in $ARMS; do
 log ""
 log "==> arm $ARM (oc llama-server :$OC_PORT; filter: $FILTER)"
@@ -582,11 +628,13 @@ docker run --rm \
   '
 SUB_RC=$?
 set -e
-# #007: ticker down first (the index must stop moving before the repair pass
-# reads it), then repair this arm's frozen runDirs from the host log.
+# #007/#002: ticker down first (the index must stop moving before the post-arm
+# pass reads it), then slice every fresh runDir from the host log, repair the
+# frozen ones, and scan every slice for the #002 overflow line — all strictly
+# before the row audit / gate read the registry.
 if [ -n "$TIMINGS_INDEX" ]; then
   stop_timings_ticker
-  repair_arm_timings
+  post_arm_capture_pass
 fi
 [ "$SUB_RC" -ne 0 ] && ARMS_RC=1
 log "==> arm $ARM exit rc=$SUB_RC (cell failures are tolerated; row accountability is audited post-gate)"
@@ -647,13 +695,14 @@ else
 fi
 
 log ""
-log "==> Done. registry: $HOST_REG   (arms rc=$ARMS_RC, audit rc=$AUDIT_RC, gate rc=$GATE_RC)"
+log "==> Done. registry: $HOST_REG   (arms rc=$ARMS_RC, audit rc=$AUDIT_RC, overflow rc=$OVERFLOW_RC, gate rc=$GATE_RC)"
 log "    verdicts: docker run --rm -v \"$REPO_DIR:$REPO_DIR\" -w \"$REPO_DIR/host/test\" --entrypoint node $RUNNER_IMAGE scripts/config-ab-verdict.mjs \"$HOST_REG\" --tier $TIER --treatment <arm> --baseline $BASELINE"
 # Exit-code precedence (#003): ANY nonzero phase fails the sweep; when several
-# fail, the most upstream cause wins the code — 1 arms, 2 row shortfall,
-# 3 gate. The old `exit $GATE_RC` let a REUSE_ROWS sweep whose arms all wedged
-# exit 0 on a gate that passed against pre-existing rows.
+# fail, the most upstream cause wins the code — 1 arms, 2 registry
+# accountability (row shortfall OR a #002 overflow relabel that could not be
+# applied), 3 gate. The old `exit $GATE_RC` let a REUSE_ROWS sweep whose arms
+# all wedged exit 0 on a gate that passed against pre-existing rows.
 [ "$ARMS_RC"  -eq 0 ] || exit 1
-[ "$AUDIT_RC" -eq 0 ] || exit 2
+[ "$AUDIT_RC" -eq 0 ] && [ "$OVERFLOW_RC" -eq 0 ] || exit 2
 [ "$GATE_RC"  -eq 0 ] || exit 3
 exit 0
