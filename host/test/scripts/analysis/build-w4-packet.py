@@ -235,6 +235,7 @@ def render_packet(run_id: str, summary: dict, iters: list[dict]) -> str:
         ("workspace_changed_count", summary.get("workspace_changed_count")),
         ("no_progress_repeat_count", summary.get("no_progress_repeat_count")),
         ("error_tool_call_count", summary.get("error_tool_call_count")),
+        ("truncated_tool_call_count", summary.get("truncated_tool_call_count")),
         ("timing_caveats", summary.get("timing_caveats")),
     ]
     for k, v in fields:

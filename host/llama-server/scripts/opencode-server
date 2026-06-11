@@ -42,11 +42,16 @@
 #   ./scripts/opencode-server health     # exit 0 iff /health is green
 #   ./scripts/opencode-server probe      # /apply-template: assert the #004 fix
 #                                        #   + closed <think></think> prefill
+#                                        #   + LIVE tool-call battery (#010
+#                                        #   Layer-A admission gate: N/N parsed
+#                                        #   tool_calls, zero naked-XML leaks)
 #   ./scripts/opencode-server install    # render+bootstrap the launchd plist for
 #                                        #   login-persistent serving, then wait
 #                                        #   for green /health (tier-64: the
 #                                        #   resident daily daemon; tier-16 also
 #                                        #   has a plist; tier-32 is on-demand only)
+#                                        #   then run the canonical probe (#010
+#                                        #   admission gate) against the daemon
 #   ./scripts/opencode-server uninstall  # bootout + remove the rendered plist
 #
 # The boot incantation mirrors the known-good non-grammar boot in
@@ -242,9 +247,13 @@ cmd_status() {
 
 cmd_health() { if is_green; then echo "green: $BASE/health"; else echo "unreachable: $BASE/health"; exit 1; fi; }
 
-# /apply-template probe — proves the LIVE server carries the system-not-first fix
-# (#004 tier-64 / #018 tier-16) AND the closed <think></think> thinking-off prefill
-# (#017). Template-only (no GPU). Load-bearing for OpenCode: no grammar backstop.
+# Canonical Layer-A admission probe. Checks 1-3 are /apply-template template
+# invariants (system-not-first fix #004 tier-64 / #018 tier-16; closed
+# <think></think> thinking-off prefill, launch-default AND per-request #017) —
+# template-only, no GPU. Check 4 (#010, decision 2026-06-10) is the LIVE
+# tool-call battery: real generations through validate-tool-calls.sh; pass =
+# N/N responses carry a parsed tool_calls[] with valid-JSON args and zero
+# naked-XML/content leaks. Load-bearing for OpenCode: no grammar backstop.
 _probe_prompt() { curl -s -X POST "$BASE/apply-template" -H 'content-type: application/json' -d "$1" \
   | python3 -c 'import json,sys; print(json.load(sys.stdin).get("prompt",""))' 2>/dev/null || true; }
 cmd_probe() {
@@ -274,6 +283,39 @@ cmd_probe() {
   else
     echo "  FAIL  thinking-off (#017 per-request): explicit enable_thinking:false NOT honored"; fails=$((fails+1))
   fi
+  # 4) #010 Layer-A admission gate (decision 2026-06-10): LIVE tool-call
+  #    battery. Unlike checks 1-3 this generates tokens: 3 tool-demanding
+  #    prompts x REPEATS x 2 modes (non-stream + stream) via
+  #    validate-tool-calls.sh (#013 engine — its SUMMARY/RESULT block always
+  #    prints, so the final RESULT: line is parseable unconditionally).
+  #    Pass = N/N runs produced a parsed tool_calls[] with valid-JSON args and
+  #    zero naked-XML (<tool_call>/<function=) content leaks. N is pinned at 6
+  #    (REPEATS=1: every distinct request shape exactly once) — issue #010.
+  #    Measured runtime on an idle server (2026-06-11): ~4-5 s/battery at
+  #    tier-64 AND tier-16/32 — tool-call emissions are short generations;
+  #    budget ~1 min worst-case on a busy box (model load is NOT part of
+  #    probe). REPEATS may be raised (driver preflight) but never zeroed:
+  #    this IS the admission gate — no skip knob by design.
+  local reps battery_n battery_log counts leaks
+  reps="${OPENCODE_PROBE_TOOLCALL_REPEATS:-1}"
+  [[ "$reps" =~ ^[1-9][0-9]*$ ]] || die "OPENCODE_PROBE_TOOLCALL_REPEATS must be a positive integer (got '$reps') — the #010 battery cannot be skipped"
+  battery_n=$((3 * reps * 2))
+  battery_log="$(mktemp /tmp/opencode-probe-battery.XXXXXX)"
+  echo "  ....  tool-call battery (#010): $battery_n live generations via validate-tool-calls.sh (REPEATS=$reps)"
+  REPEATS="$reps" BASE="$BASE" MODEL="$ALIAS" SAVE_DIR="" \
+    "$SCRIPT_DIR/validate-tool-calls.sh" > "$battery_log" 2>&1 || true
+  counts="$(awk '/^ SUMMARY: /{print $2; exit}' "$battery_log")"
+  leaks="$(grep -c 'XML LEAK' "$battery_log" || true)"
+  if grep -q '^RESULT: PASS' "$battery_log"; then
+    echo "probe: tool-call battery ${counts:-$battery_n/$battery_n} parsed, ${leaks:-0} leaks — PASS"
+    rm -f "$battery_log"
+  else
+    echo "probe: tool-call battery ${counts:-0/$battery_n} parsed, ${leaks:-?} leaks — FAIL"
+    echo "      battery diagnostics (full log kept: $battery_log):"
+    grep -E '^── |^  FAIL|XML LEAK|^ SUMMARY:|^RESULT:' "$battery_log" | sed 's/^/      /' || true
+    fails=$((fails+1))
+  fi
+
   [[ "$fails" -eq 0 ]] || die "$fails probe check(s) failed"
   echo "probe: all checks passed (tier-$TIER, $BASE)"
 }
@@ -328,6 +370,14 @@ cmd_install() {
   else
     die "launchd service loaded but /health not green within ${HEALTH_TIMEOUT}s; log tail: $(tail -5 "$LOG")"
   fi
+  # #010: install is an admission seat — run the canonical probe (template
+  # invariants + live tool-call battery) against the freshly bootstrapped
+  # daemon, so a template/build regression can never enter service via a bare
+  # `opencode-server install`. (Wizard step 51 also probes after install — a
+  # benign double-run; one oracle, two seats.) cmd_probe die()s on failure,
+  # which fails the install with the daemon left up for diagnosis.
+  echo "  running canonical admission probe (template invariants + #010 tool-call battery)"
+  cmd_probe
 }
 
 cmd_uninstall() {

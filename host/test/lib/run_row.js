@@ -144,6 +144,18 @@ export function assembleRow(clawResult, ctx) {
     passed,
     harness_error,
     iters_count: iterRecords.length,
+    // #010 (decision 2026-06-10): tool-call telemetry promoted verbatim from
+    // the run_summary sidecar (computed by lib/opencode_transcript.js). Drift
+    // telemetry ONLY — no threshold, no exclusion rule, no eligibility effect
+    // (paired_bootstrap.isEligible ignores unknown row fields, #012); the
+    // threshold decision is deferred to issue #018. Null whenever the sidecar
+    // carries no counters: historical claw-rig rows, outcome-only/degraded
+    // runs, and absent sidecars all stay valid. truncated_tool_call_count
+    // (#017) preserves the censoring-aware split — in-flight parts at
+    // hard-kill are truncation, NOT tool errors.
+    tool_call_count: countOrNull(summary?.tool_call_count),
+    error_tool_call_count: countOrNull(summary?.error_tool_call_count),
+    truncated_tool_call_count: countOrNull(summary?.truncated_tool_call_count),
     trace_artifact_uri: clawResult.runDir ?? null,
     screening_only: ctx.screening_only ?? (ctx.run_kind === 'overnight_screen'),
   };
@@ -185,6 +197,15 @@ function readJsonIfExists(runDir, fname) {
 function isoFromMs(ms) {
   if (typeof ms !== 'number' || !Number.isFinite(ms)) return null;
   return new Date(ms).toISOString();
+}
+
+// #010 telemetry promotion: a counter is only a counter — accept non-negative
+// integers verbatim (including 0, which is a real observation, not "absent");
+// anything else (missing field, null, strings, floats, negatives from a
+// corrupt sidecar) maps to null so the row stays schema-valid and the absence
+// is distinguishable downstream (#018 reads null as "no telemetry").
+function countOrNull(v) {
+  return Number.isInteger(v) && v >= 0 ? v : null;
 }
 
 function pickTerminalStatus(clawResult, summary, upstreamFailure) {

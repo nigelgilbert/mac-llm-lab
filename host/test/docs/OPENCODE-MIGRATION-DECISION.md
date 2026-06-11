@@ -151,7 +151,17 @@ markdown. Nothing irreplaceable remains.
 - Thinking-on: unmeasured at any tier.
 - Tier-32: no comparative data; adopted by extrapolation (same 9B).
 - Latency/prose-quality/tool-discipline probes from the old suite were
-  claw-bridge-only (no registry rows); they have no OpenCode counterpart yet.
+  claw-bridge-only (no registry rows); latency/prose-quality still have no
+  OpenCode counterpart. **Tool-discipline gap CLOSED 2026-06-11** (issue
+  #010, decision 2026-06-10, measurement-first): the Layer-A admission gate
+  is now the live tool-call battery in `opencode-server probe` (N=6 —
+  3 tool-demanding prompts × 1 repeat × non-stream+stream via
+  validate-tool-calls.sh; pass = N/N parsed `tool_calls[]`, zero naked-XML
+  leaks; seats: `probe`, `install`, wizard step 51), and registry rows now
+  carry `tool_call_count` / `error_tool_call_count` /
+  `truncated_tool_call_count` promoted from the run_summary sidecar
+  (nullable, telemetry only — NO threshold, NO exclusion rule; threshold
+  review deferred to issue #018).
 - Token accounting: registry carries no token fields (#021/#022 partial).
 - Tier-16/-32 remain **capability proxies** on 64 GB silicon, not
   memory-tier tests; thinking-off both arms; split provenance — caveats

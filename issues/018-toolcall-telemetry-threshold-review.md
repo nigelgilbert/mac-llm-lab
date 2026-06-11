@@ -10,6 +10,21 @@ Deferred half of the #010 decision (2026-06-10): instrument first,
 legislate after data exists. See issues/010-layer-a-toolcall-gate.md
 §Decision, point 3.
 
+> **2026-06-11 — #010 landed; telemetry shape differs from the draft below.**
+> Per the final decision restatement (issues/WORKLOG.md §Plan) registry rows
+> now carry `tool_call_count` / `error_tool_call_count` /
+> `truncated_tool_call_count` (nullable, promoted verbatim from the
+> run_summary sidecar; no threshold anywhere). The naked-XML **leak counter**
+> and `unmapped_tool_call_count` were NOT promoted to rows: leak detection is
+> wire-level in the `opencode-server probe` battery (the admission gate,
+> N=6/probe — every probe/install/wizard-51 seat now produces a leak
+> observation), and unmapped stays sidecar-only. This review should therefore
+> tally the three landed row fields (+ probe battery history for leaks); if
+> the data argues for row-level leak/unmapped telemetry, file that promotion
+> as the follow-up implementation issue this review already anticipates.
+> `error_tool_call_count` on rows remains behavioral data, not a gate input —
+> the caveat below stands.
+
 ## What to build
 
 Nothing until the data exists. After #010's instrumentation lands and the
@@ -44,5 +59,5 @@ registry rows:
 
 ## Blocked by
 
-- #010 (instrumentation must land first)
+- ~~#010 (instrumentation must land first)~~ ✅ landed 2026-06-11 (see note above for the landed field set)
 - First post-sprint N≥8 sweep (any planned A/B counts; do not run a sweep solely for this)

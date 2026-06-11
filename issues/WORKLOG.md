@@ -274,4 +274,44 @@ Committed as T3.
 Launched: #010 (Layer-A tool-call gate, measurement-first per recorded
 decision).
 
+### T4 result — ✅ complete
+
+- Gate: `opencode-server probe` check 4 = tool-call battery via the
+  #013-hardened validate-tool-calls.sh (N=6 pinned: 3 prompts ×
+  non-stream+stream; `OPENCODE_PROBE_TOOLCALL_REPEATS` raises N, can't
+  be zeroed; no skip knob — it IS the admission gate). Verdict line
+  `probe: tool-call battery 6/6 parsed, 0 leaks — PASS`; ~4-5 s per
+  tier. Agent caught a false premise in the decision text: cmd_install
+  did NOT previously invoke the probe — appended `cmd_probe` to
+  `cmd_install` so the install seat is real. Wizard step 51 inherits by
+  delegation (no wizard edit).
+- Telemetry: `tool_call_count` / `error_tool_call_count` /
+  `truncated_tool_call_count` promoted to registry rows (nullable
+  integers; null for outcome-only/claw-rig sidecars; no threshold
+  anywhere; isEligible-neutral, contract-tested). Schema extended;
+  canonical registries re-validate (2,048 rows, 0 invalid). W4 packet
+  builder consumes the truncated counter (#017 carry-forward closed).
+- Verified red-path: stub server (prose / leak modes) turns the probe
+  red 0/6 exit 1; healthy 64 (resident, lock) + 16 + 32 (booted and
+  stopped, ports quiet after) all 6/6.
+
+### T4 boundary verification (orchestrator)
+
+- Suite: **290 tests / 289 pass / 1 skip / 0 fail**. Diff matches
+  ownership.
+- Live smoke: green; the emitted row carries
+  `tool_call_count: 6, error_tool_call_count: 1,
+  truncated_tool_call_count: 0` — opencode-era parse-error telemetry is
+  flowing (exactly what #018's threshold review needs).
+- Carry-forwards to T5/#016: wizard installs now run the battery twice
+  (cmd_install + step 51's probe — dedupe when consolidating call
+  sites); step 51's "no tokens generated" comment stale; #015's
+  driver-preflight rotation recommendation.
+
+Committed as T4.
+
+## T5 — started 2026-06-11
+
+Launched: #016 (single tier table — the last open issue).
+
 (awaiting agent report)
