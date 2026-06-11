@@ -1,5 +1,11 @@
 # Config-B server prompt/decode timings (issue #022)
 
+> **Deferred — post-v1, not shipped.** This is the spec for issue **#022**; the runner
+> integration is **blocked on the #021 transcript adapter** (iteration records) and stays
+> opt-in / off-by-default even once built. Read everything below as the contract #021/#016
+> implement, **not as current behavior**. Revival path:
+> [research-salvage-next-tranche §4](../../../research/research-salvage-next-tranche-20260610.md).
+
 **Status:** capture mechanism + parse/join library shipped. #010 (`runOpenCode`)
 landed *without* timings capture by design — the ordinal join needs #021's iteration
 records — so the cursor-bracketing + join wiring lands with **#021** (transcript

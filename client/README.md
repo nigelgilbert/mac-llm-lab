@@ -2,6 +2,11 @@
 
 Thin POSIX-shell wrapper for the LLM Lab LAN AI lab. Runs on power-user laptops; opens the browser to the right Open WebUI deep-link and SSHes the host for control actions.
 
+> **Scope — this is the chat client, not the coding path.** `mac-llm-lab` orchestrates
+> the **Open WebUI** LAN chat lineup (the five OWUI profiles). Agentic **coding** does
+> *not* run through here — it runs on OpenCode via the `oc` wrapper (see
+> [`opencode/README.md`](opencode/README.md), installed by the wizard).
+
 Spec ref: [`spec.md` §13](../spec.md), step 6.
 
 ## Install

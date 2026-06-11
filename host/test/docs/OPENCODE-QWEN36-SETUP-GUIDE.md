@@ -1,5 +1,13 @@
 # Guide — OpenCode + Qwen3.6-35B-A3B local setup (Config B reference)
 
+> **Status (2026-06-10): implemented & validated.** All three serving-correctness fixes
+> below shipped during the OpenCode migration and were verified on our hardware — see the
+> inline #004 (corrected Jinja template) and #006 (per-request `enable_thinking` + native
+> tool-call parsing) resolutions, plus
+> [TOOL-CALL-VALIDATION.md](../../llama-server/docs/TOOL-CALL-VALIDATION.md). This guide is
+> **retained for the *why*** behind each serving fix; the "not yet validated on our
+> hardware" framing below is historical — it described the original spike.
+
 Companion to [OPENCODE-HARNESS-AB-PLAN.md](OPENCODE-HARNESS-AB-PLAN.md). The
 **§2 decision is now locked to (a) / apples-to-apples** (same GGUF both sides), so
 this is the source-of-truth serving + tool-use recipe for **Config B**. Output of a
