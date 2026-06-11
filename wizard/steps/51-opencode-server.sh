@@ -44,22 +44,16 @@ step_51_is_done() {
   step_51_loaded && step_51_healthy
 }
 
-# Read-only template probe (curl-only twin of `opencode-server probe`):
-# the LIVE server must carry the system-not-first fix (#004/#018) and the
-# thinking-off closed <think></think> prefill (#017). /apply-template is
-# template-only — no tokens are generated, safe against a busy server.
+# Canonical template probe — DELEGATED to `opencode-server probe` (#011).
+# The previous curl-only twin asserted just 2 of cmd_probe's 3 template
+# invariants (it was born without the old-suite-#017 per-request
+# enable_thinking:false check), so a wizard-passing server could fail the
+# canonical probe. One oracle, one place. Still read-only: /apply-template
+# is template-only — no tokens are generated, safe against a busy server.
+# $1 = tier.
 step_51_probe() {
-  local base="http://127.0.0.1:${OC_PORT}" out
-  out=$(curl -fsS --max-time 10 -X POST "${base}/apply-template" \
-          -H 'content-type: application/json' \
-          -d '{"messages":[{"role":"user","content":"hi"},{"role":"system","content":"WIZARD_SENTINEL_51"},{"role":"user","content":"ok"}]}' 2>/dev/null)
-  printf '%s' "$out" | grep -qF 'WIZARD_SENTINEL_51' || return 1
-  printf '%s' "$out" | grep -qF '<|im_start|>system' || return 1
-  out=$(curl -fsS --max-time 10 -X POST "${base}/apply-template" \
-          -H 'content-type: application/json' \
-          -d '{"messages":[{"role":"user","content":"hi"}]}' 2>/dev/null)
-  # In the raw JSON reply the closed prefill appears with escaped newlines.
-  printf '%s' "$out" | grep -qF '<think>\n\n</think>'
+  ( cd "${REPO_ROOT}/host/llama-server" \
+      && OPENCODE_TIER="$1" ./scripts/opencode-server probe )
 }
 
 step_51_main() {
@@ -107,7 +101,14 @@ step_51_main() {
   if step_51_is_done; then
     skip "${OC_LABEL} already loaded and healthy on :${OC_PORT}"
     info "refusing to call \`launchctl bootout\` on a running service"
-    return 0
+    act "verifying live template via canonical probe (read-only, 3 invariants)"
+    if step_51_probe "$tier"; then
+      ok "canonical probe passed (system-not-first + thinking-off: launch default AND per-request)"
+      return 0
+    fi
+    fail "live server on :${OC_PORT} FAILED the canonical template probe"
+    info "debug: OPENCODE_TIER=${tier} host/llama-server/scripts/opencode-server probe"
+    return 1
   fi
   if step_51_loaded && ! step_51_healthy; then
     warn "service loaded but :${OC_PORT}/health not responding"
@@ -126,11 +127,12 @@ step_51_main() {
     fail "install returned but ${OC_LABEL} is not loaded+green on :${OC_PORT}"
     return 1
   fi
-  act "probing live template (system-not-first fix + thinking-off prefill)"
-  if step_51_probe; then
-    ok "template probe passed (corrected template, closed <think></think>)"
+  act "verifying live template via canonical probe (read-only, 3 invariants)"
+  if step_51_probe "$tier"; then
+    ok "canonical probe passed (system-not-first + thinking-off: launch default AND per-request)"
   else
-    warn "template probe failed — server green but template behavior unexpected"
+    fail "server green but FAILED the canonical template probe"
     info "debug: OPENCODE_TIER=${tier} host/llama-server/scripts/opencode-server probe"
+    return 1
   fi
 }

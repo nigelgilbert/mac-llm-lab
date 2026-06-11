@@ -28,8 +28,12 @@
 // Test_id is read from run_summary.json (set by ITER_DIST_TEST_ID at run time);
 // test_version + oracle_type are joined from the test_manifest header.
 //
-// Emission failure is logged to stderr but does not throw — discipline is to
-// inspect stderr at sweep tail rather than half-fail an assert.
+// Emission failure is logged to stderr and FAILS the process exit code
+// (#006): it still never throws (a throw mid-reporter would abort the flush
+// of every later cell in the file), but `process.exitCode = 1` makes the
+// cell's `node --test` exit nonzero, so the sweep driver's ARMS_RC / exit
+// path (#003) sees the lost row instead of it riding stderr-only. The
+// driver's post-gate expected-attempts audit names the missing cell.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -55,6 +59,12 @@ export function writeAssertionResult(runDir, payload) {
       maybeEmitRegistryRow(runDir);
     } catch (e) {
       console.error(`[run-registry] emit failed for ${runDir}: ${e.stack || e.message}`);
+      // #006: a swallowed emit failure must fail the cell's rc, not ride
+      // stderr-only. The reporter runs in the `node --test` parent process;
+      // node:test only ever RAISES the exit code (0 → 1 on test failure), so
+      // setting it here survives a green test run and turns the cell red at
+      // the driver (ARMS_RC → exit 1) — deliberately no throw, see header.
+      process.exitCode = 1;
     }
   }
 }

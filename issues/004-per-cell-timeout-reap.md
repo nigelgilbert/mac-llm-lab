@@ -2,7 +2,7 @@
 
 **Type**: AFK
 
-**Status:** 🔲 Not started
+**Status:** ✅ Complete
 
 ## Parent
 
@@ -42,3 +42,41 @@ or stray containers from other contexts are left alone.
 ## Blocked by
 
 None - can start immediately (coordinate with #003 — same file)
+
+## Result
+
+Implemented in `host/test/run-config-ab.sh` + `client/opencode/docker-compose.yml`
+(2026-06-10, tranche 2). Label contract:
+
+- The driver generates `OC_SWEEP_ID=config-ab-<stamp>-<pid>` per sweep and
+  forwards it via `-e OC_SWEEP_ID` into the eval-runner; runOpenCode's
+  `docker compose run` spawn inherits `process.env`, and the compose service
+  label `mac-llm-lab.sweep=${OC_SWEEP_ID:-}` stamps it onto every `oc-run-*`
+  sibling. Verified empirically: a `docker compose run` container carries the
+  label, `docker ps --filter label=mac-llm-lab.sweep=<id>` matches it, a
+  different id matches nothing, and an unset env interpolates to an empty
+  label (no compose warning) that a non-empty filter never matches.
+- Per-cell reap: when the cap exits 124 (TERM) or 137 (`--kill-after` KILL),
+  the arm loop `docker rm -f`s everything matching this sweep's label
+  immediately (only one cell is in flight, so sweep scope == cell scope).
+- The end-of-sweep trap's orphan filter switched from `name=oc-run-` to the
+  same sweep label.
+
+Per-AC evidence (real command output, 2026-06-10):
+
+- [x] **Zero this-sweep containers within seconds of the kill**:
+  `PER_TEST_TIMEOUT=10 SMOKE_TESTS=wordy ...` (wordy needs ~20 s) — the reap
+  line printed inside the arm loop right after the 10 s kill, and
+  `docker ps -a --filter name=oc-run-` immediately after the sweep listed
+  ONLY the decoy.
+- [x] **Truthful log line**: `>>> cell wordy KILLED by per-cell cap (rc=124):
+  NO row emitted (reporter flush never ran); reaped sweep container(s):
+  oc-run-ffb32d6d-1606-4eb0-a896-d0c437f7c30c`. The non-timeout failure
+  branch now says a row was emitted *iff* runAgent reached the reporter
+  flush, with the #003 audit as arbiter — never the old unconditional "(row
+  still emitted)".
+- [x] **Decoy survives**: a manually-started unlabeled `oc-run-decoy`
+  remained Up through the per-cell reap AND the exit trap (no
+  `[cleanup] reaping` line fired); removed manually afterwards.
+- [x] **Clean smoke reaps nothing mid-run**: the 2-cell clean smoke
+  (`deep-equal wordy`) exited 0 with no reap lines.

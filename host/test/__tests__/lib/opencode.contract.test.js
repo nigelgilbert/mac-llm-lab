@@ -145,7 +145,7 @@ describe('dockerComposeArgv: argv construction', () => {
     assert.deepEqual(args, [
       'compose', '-f', '/repo/client/opencode/docker-compose.yml',
       'run', '--rm', '-T', '--name', 'oc-run-abc',
-      'opencode', 'opencode', 'run', 'do a thing',
+      'opencode', 'opencode', 'run', '--', 'do a thing',
     ]);
   });
 
@@ -177,7 +177,7 @@ describe('dockerComposeArgv: argv construction', () => {
     // The mount must precede the SERVICE name, else docker treats it as a cmd arg.
     assert.ok(vIdx < svcIdx, '-v must come before the service name');
     // Still the one-shot run shape afterward.
-    assert.deepEqual(args.slice(svcIdx), ['opencode', 'opencode', 'run', 'do a thing']);
+    assert.deepEqual(args.slice(svcIdx), ['opencode', 'opencode', 'run', '--', 'do a thing']);
   });
 
   it('omits the bind mount when no dataMount is given (pre-#021 argv)', () => {

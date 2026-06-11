@@ -78,7 +78,12 @@ const seenContexts = new WeakSet();
  * @property {string}      stderr
  * @property {number}      elapsedMs
  * @property {string}      runDir            Sidecar directory.
- * @property {'timeout'=}  terminal_status   Set to 'timeout' when the signal aborted.
+ * @property {'timeout'|'interrupted'|'harness_error'=} terminal_status  Absent
+ *   on a normal exit. 'timeout' = the runner's internal hard ceiling fired;
+ *   'interrupted' = the CALLER's signal aborted (runAgent cancellation /
+ *   Ctrl-C — #001; excluded from pass-rate denominators by
+ *   paired_bootstrap.isEligible); 'harness_error' = spawn-level failure
+ *   (no run happened).
  */
 
 /** @typedef {import('node:child_process').SpawnSyncReturns<string>} PostResult */
@@ -151,9 +156,11 @@ export async function runAgent({
   // registry-reporter via globalThis.__registryReporterLoaded — but node:test
   // runs each test file under --test-isolation=process and custom reporters
   // run in the parent's context, so a global set by the reporter is invisible
-  // here. The backstop now is expected-attempts.mjs's diff: a sweep with the
-  // reporter accidentally unwired produces zero sidecars and the diff flags
-  // every cell as missing.
+  // here. The backstop is the driver's row audit (#003): run-config-ab.sh
+  // writes the expected-attempts plan (TASKS × REPEATS × ARMS) before its
+  // arms phase and diffs the fresh registry rows after the gate, so a sweep
+  // with the reporter accidentally unwired produces zero rows and the audit
+  // names every cell missing (driver exit 2).
 
   // run_summary.json's test_id field is populated from this env var when the
   // runner writes its run sidecar. Reporter doesn't read it; it's for the
@@ -197,8 +204,9 @@ export async function runAgent({
     } else {
       // Telemetry hiccup left runDir unset (the runner's sidecar collection is
       // best-effort by design). Skip the diagnostic so the reporter doesn't
-      // write a sidecar under the literal path "undefined".
-      // expected-attempts.mjs's diff catches the resulting missing registry row.
+      // write a sidecar under the literal path "undefined". The driver's
+      // post-gate expected-attempts audit (#003, run-config-ab.sh) names the
+      // resulting missing registry row and fails the sweep.
       console.error(`[runAgent] no runDir from runner for testId=${testId}; sidecar will not be written`);
     }
     t.diagnostic(`test_id=${testId}`);

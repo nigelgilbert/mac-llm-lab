@@ -2,7 +2,7 @@
 
 **Type**: AFK
 
-**Status:** 🔲 Not started
+**Status:** ✅ Complete
 
 ## Parent
 
@@ -49,11 +49,71 @@ Three fixes to `client/opencode/bin/oc` (one touches
 
 ## Acceptance criteria
 
-- [ ] From a foreign cwd, `OPENCODE_CONFIG_JSON=./tier.json oc run ...` with `./tier.json` present resolves and mounts that file (verify the in-container config matches); with it absent, oc exits 2 before docker runs
-- [ ] `oc run "--weird prompt"` either delivers the literal prompt to the model (verified via wire capture) or exits with an explicit dash-leading-prompt error — no silent flag-parse
-- [ ] `oc probe` passes by finding the planted sentinel in the captured request body; doctoring the capture to contain only the attribution line makes it fail
-- [ ] Wizard step 61 still green end-to-end after the oracle change
+- [x] From a foreign cwd, `OPENCODE_CONFIG_JSON=./tier.json oc run ...` with `./tier.json` present resolves and mounts that file (verify the in-container config matches); with it absent, oc exits 2 before docker runs
+- [x] `oc run "--weird prompt"` either delivers the literal prompt to the model (verified via wire capture) or exits with an explicit dash-leading-prompt error — no silent flag-parse
+- [x] `oc probe` passes by finding the planted sentinel in the captured request body; doctoring the capture to contain only the attribution line makes it fail
+- [x] Wizard step 61 still green end-to-end after the oracle change
 
 ## Blocked by
 
 None - can start immediately
+
+## Result
+
+All three fixes landed (2026-06-10). Files changed: `client/opencode/bin/oc`
+(all three fixes) and `host/test/lib/opencode.js` (the one surgical
+`dockerComposeArgv` edit). Verified end-to-end with real container runs; the
+live `oc run` legs ran under the `/tmp/oc-resident.lock.d` lock.
+
+**Upstream `--` finding (decides fix 2's shape):** verified in-container on
+opencode 1.16.2 via the wire-capture mock — `opencode run -- "--weird prompt
+SENTINEL"` exits 0 and the literal prompt appears in the captured
+`/v1/chat/completions` body; without `--` the same prompt yargs-parses as
+flags (usage dump, exit 1, NO request ever sent — and a prompt like
+`--demo x` would silently flip a real flag). So the separator was added at
+both call sites: `run_container opencode run -- "$@"` in oc (and the probe's
+in-container `opencode run -- "say hi"`), and
+`'opencode', 'run', '--', prompt` in `dockerComposeArgv`.
+
+**AC1 (relative config absolutized):** from foreign cwd
+`/tmp/oc-foreign.AzThFw` with `./tier.json` carrying a unique model name
+(`ac1-foreign-model`) and a baseURL only it knows
+(`host.docker.internal:9099`, host-side capture mock):
+`OPENCODE_CONFIG_JSON=./tier.json oc run "...MARKER-AC1-PRESENT-55917"`
+→ rc=0, both captured request bodies show `model: ac1-foreign-model` + the
+prompt marker — the in-container effective config IS the caller-cwd-relative
+file. Absent case: fresh empty cwd, docker shimmed via PATH logger →
+`oc: PROMPT PRECONDITION FAILED: opencode config missing/unreadable:
+./tier.json`, rc=2, shim log empty (no docker invocation).
+
+**AC2 (flag-safe prompt):** `oc run "--weird prompt MARKER-AC2-DASH-66120"`
+through the real oc path → rc=0, literal dash-leading prompt present in both
+captured request bodies. Harness side carries the same `--`.
+
+**AC3 (content-true oracle):** `oc probe` now copies the resolved prompt to
+`$ws/AGENTS.probe.md`, appends a unique tail sentinel
+(`OC-PROBE-SENTINEL-<epoch>-<pid>-<rand>`), mounts the copy, and gates
+PASS/FAIL on the sentinel reaching the captured body (attribution grep
+demoted to a non-gating diagnostic). Live run: PASS on sentinel
+`OC-PROBE-SENTINEL-1781148537-68292-20250`. Doctored copy of oc whose mock
+records only the attribution line: probe FAIL, rc=2, with the
+"attribution line IS present without the sentinel — prompt content
+truncated/dropped in flight" diagnostic (the pre-#014 oracle would have
+passed this capture).
+
+**AC4 (wizard step 61):** ran `step_61_main` under the resident lock (wizard
+libs + steps sourced exactly as `cmd_install` does; sibling's mid-flight
+edits were in `wizard/wizard`/`steps/51`, step 61's file untouched) → both
+legs green, rc=0: probe PASS on sentinel
+`OC-PROBE-SENTINEL-1781148611-68424-15533`, and the real
+`oc run` (through the new `--` path, tier-64 resident :11436) produced
+`smoke.txt` containing `WIZARD-OC-SMOKE-68411`. This run is also the
+ordinary-prompt sanity check.
+
+**Known follow-up (file outside this issue's ownership):**
+`host/test/__tests__/lib/opencode.contract.test.js` pins the pre-`--` argv
+with `assert.deepEqual` in two places (lines ~145–149 and ~180:
+`['opencode', 'opencode', 'run', <prompt>]` → needs
+`['opencode', 'opencode', 'run', '--', <prompt>]`); the `args.at(-1)`
+assertion at ~163 is unaffected. Left untouched per the tranche's file
+ownership — apply at the orchestrator boundary.

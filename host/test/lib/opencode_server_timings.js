@@ -10,8 +10,8 @@
 //
 // CAPTURE MECHANISM (primary): the OpenCode-dedicated `llama-server` is launched
 // with `--metrics` and writes a human-readable timing block to its own log
-// (/tmp/opencode-llama-server.log, or ...-16.log for tier-16) per completed
-// request:
+// (/tmp/opencode-llama-server.log, or ...-16.log / ...-32.log for tiers 16/32;
+// OPENCODE_LLAMA_LOG overrides verbatim, #007) per completed request:
 //
 //   slot print_timing: id  0 | task 113 |
 //   prompt eval time =     132.30 ms /    23 tokens ( 5.75 ms per token, 173.85 tokens per second)
@@ -21,9 +21,16 @@
 // These lines carry NO wall-clock timestamp, so a run cannot be sliced by a time
 // window the way `_bridge.jsonl` is. Instead the runner brackets a run with a
 // **log cursor**: the server log's byte length at run-start and run-finish. The
-// slice between the two offsets is exactly the requests this run issued (the
-// phase-swap topology means one server, one client — request order == iteration
-// order), and pairing is ordinal: the k-th completed request → the k-th iteration.
+// slice between the two offsets is exactly the requests this run issued — but
+// NOT only the build iterations: OpenCode also fires a session-title request
+// (`agent=title`, `small=true`) at the same server before the first build
+// iteration (ws020 evidence), so pairing is keyed on token counts (#008):
+// block `prompt_tokens`/`decode_tokens` ↔ iteration `input_tokens`/
+// `output_tokens`(+`reasoning_tokens`), order-preserving, exact-first then
+// ±TOKEN_MATCH_TOLERANCE. Title/summarize blocks stay unattached. The log path
+// honors OPENCODE_LLAMA_LOG verbatim (#007, shared with the bash launcher and
+// the run-config-ab.sh bind mount) and a missing/unreadable log at cursor-open
+// fails loud (stderr + join_status 'log_unreadable'), never a silent degrade.
 //
 // CAPTURE MECHANISM (alternative, forward-compat): a thin logging proxy on the
 // OpenCode->server hop can record each request's response `timings` JSON with
@@ -38,6 +45,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 export const SCHEMA_VERSION = 1;
 
@@ -58,15 +66,27 @@ export function serverTimingsEnabled(env = process.env) {
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve the conventional log path for an OpenCode server tier.
- * @param {number|string} tier  64 (default) or 16.
+ * Resolve the log path for an OpenCode server tier.
+ *
+ * `OPENCODE_LLAMA_LOG` (the same variable the bash launcher honors, see
+ * llama-server/scripts/opencode-server) wins when set and non-empty and is used
+ * VERBATIM — this is the #007 contract with run-config-ab.sh, which bind-mounts
+ * the host per-tier log read-only into the eval-runner (at
+ * /var/log/opencode-llama-server.log) and points OPENCODE_LLAMA_LOG at it.
+ * Otherwise the conventional per-tier host path: tier 16 → `-16.log`,
+ * tier 32 → `-32.log`, tier 64 (default) → the unsuffixed resident log.
+ *
+ * @param {number|string} tier  64 (default), 32 or 16.
+ * @param {NodeJS.ProcessEnv} [env]
  * @returns {string}
  */
-export function defaultServerLogPath(tier) {
+export function defaultServerLogPath(tier, env = process.env) {
+  const override = env ? env.OPENCODE_LLAMA_LOG : null;
+  if (typeof override === 'string' && override.length > 0) return override;
   const t = String(tier ?? 64);
-  return t === '16'
-    ? '/tmp/opencode-llama-server-16.log'
-    : '/tmp/opencode-llama-server.log';
+  if (t === '16') return '/tmp/opencode-llama-server-16.log';
+  if (t === '32') return '/tmp/opencode-llama-server-32.log';
+  return '/tmp/opencode-llama-server.log';
 }
 
 function fileSizeOrZero(p) {
@@ -78,13 +98,66 @@ function fileSizeOrZero(p) {
 }
 
 /**
+ * Find EOF by READING from `fromOffset`, not by stat. Under sweep load,
+ * OrbStack's virtiofs serves stale stat attributes for a bind-mounted file a
+ * host process is appending to — the in-container size can freeze at its
+ * container-start value for minutes — while reads past the cached EOF still
+ * return the fresh bytes (verified live at the T2 boundary, issues/WORKLOG.md).
+ * Cursor close therefore derives byteEnd from read truth.
+ * @param {string} p
+ * @param {number} fromOffset
+ * @returns {number} fromOffset + readable bytes past it (>= fromOffset)
+ */
+export function readEofSize(p, fromOffset) {
+  const CHUNK = 256 * 1024;
+  let fd;
+  try {
+    fd = fs.openSync(p, 'r');
+  } catch {
+    return fromOffset ?? 0;
+  }
+  try {
+    const buf = Buffer.alloc(CHUNK);
+    let pos = Math.max(0, fromOffset ?? 0);
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, CHUNK, pos);
+      pos += n;
+      if (n < CHUNK) return pos;
+    }
+  } catch {
+    return fromOffset ?? 0;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
  * Open a cursor at the current end of the server log. Call at run-start.
- * Safe if the log does not exist yet (byteStart = 0).
+ *
+ * #007 fail-loud contract: the runner only opens a cursor when
+ * OPENCODE_SERVER_TIMINGS=1, and at that point a missing/unreadable log is a
+ * misconfiguration (wrong tier path, missing bind mount), NOT a quiet server.
+ * Instead of silently degrading to `no_server_timings`, this logs an explicit
+ * error to stderr and marks the cursor `log_unreadable: true`;
+ * `captureServerTimings` then propagates a marker record that
+ * `joinServerTimings` surfaces as `join_status: 'log_unreadable'`.
+ *
  * @param {string} logPath
- * @returns {{ path: string, byteStart: number }}
+ * @returns {{ path: string, byteStart: number, log_unreadable?: boolean, error?: string }}
  */
 export function openServerLogCursor(logPath) {
-  return { path: logPath, byteStart: fileSizeOrZero(logPath) };
+  try {
+    fs.accessSync(logPath, fs.constants.R_OK);
+    return { path: logPath, byteStart: fs.statSync(logPath).size };
+  } catch (e) {
+    const error =
+      `[opencode_server_timings] server log unreadable at cursor-open: ${logPath} ` +
+      `(${e?.code ?? e?.message ?? e}). OPENCODE_SERVER_TIMINGS=1 requires a readable ` +
+      `server log (check the per-tier log path / the OPENCODE_LLAMA_LOG bind mount); ` +
+      `this run's server-timings join_status will be 'log_unreadable'.`;
+    console.error(error);
+    return { path: logPath, byteStart: 0, log_unreadable: true, error };
+  }
 }
 
 /**
@@ -93,7 +166,16 @@ export function openServerLogCursor(logPath) {
  * @returns {{ path: string, byteStart: number, byteEnd: number }}
  */
 export function closeServerLogCursor(cursor) {
-  return { ...cursor, byteEnd: fileSizeOrZero(cursor.path) };
+  // max(stat, read-EOF): stat alone can be frozen-stale under virtiofs (see
+  // readEofSize), while read-EOF is authoritative for appended bytes; max()
+  // keeps the cheap stat meaningful on platforms where reads short-read.
+  return {
+    ...cursor,
+    byteEnd: Math.max(
+      fileSizeOrZero(cursor.path),
+      readEofSize(cursor.path, cursor.byteStart),
+    ),
+  };
 }
 
 /**
@@ -106,16 +188,19 @@ export function closeServerLogCursor(cursor) {
  */
 export function readLogSlice(p, byteStart, byteEnd) {
   if (!fs.existsSync(p)) return '';
-  const size = fileSizeOrZero(p);
-  const start = Math.max(0, Math.min(byteStart ?? 0, size));
-  const end = Math.max(start, Math.min(byteEnd ?? size, size));
+  // Do NOT clamp `end` to the stat size: under virtiofs the stat can be
+  // frozen-stale while the bytes are readable (see readEofSize). readSync
+  // short-reads at true EOF, which bounds the slice naturally; rotation/
+  // truncation mid-run still yields an empty/short slice, never a throw.
+  const start = Math.max(0, byteStart ?? 0);
+  const end = byteEnd ?? readEofSize(p, start);
   if (end <= start) return '';
   const fd = fs.openSync(p, 'r');
   try {
     const len = end - start;
     const buf = Buffer.alloc(len);
-    fs.readSync(fd, buf, 0, len, start);
-    return buf.toString('utf8');
+    const n = fs.readSync(fd, buf, 0, len, start);
+    return buf.subarray(0, n).toString('utf8');
   } finally {
     fs.closeSync(fd);
   }
@@ -253,13 +338,94 @@ export function parseServerLogTimings(text) {
 
 /**
  * Convenience: read a run's log slice via its cursor and parse it.
- * @param {{ path: string, byteStart: number, byteEnd?: number }} cursor
+ *
+ * A cursor flagged `log_unreadable` (the #007 fail-loud path in
+ * `openServerLogCursor`) yields a single marker record — `serverTimings` is the
+ * only channel from the runner's cursor to the transcript-side join, so the
+ * marker is how `joinServerTimings` learns to emit `'log_unreadable'` instead
+ * of `'no_server_timings'`. Marker shape:
+ * `{ source: 'llama_server_log', join_error: 'log_unreadable', log_path, error }`.
+ *
+ * @param {{ path: string, byteStart: number, byteEnd?: number,
+ *           log_unreadable?: boolean, error?: string }} cursor
  * @returns {Array<object>}
  */
-export function captureServerTimings(cursor) {
+export function captureServerTimings(cursor, opts = {}) {
   if (!cursor || !cursor.path) return [];
-  const text = readLogSlice(cursor.path, cursor.byteStart, cursor.byteEnd);
+  if (cursor.log_unreadable) {
+    return [
+      {
+        source: 'llama_server_log',
+        join_error: 'log_unreadable',
+        log_path: cursor.path,
+        error: cursor.error ?? `server log unreadable at cursor-open: ${cursor.path}`,
+      },
+    ];
+  }
+  let text = readLogSlice(cursor.path, cursor.byteStart, cursor.byteEnd);
+  // Virtiofs freeze fallback (T2 boundary, issues/WORKLOG.md): under sweep
+  // load, OrbStack can freeze a container's ENTIRE view of a host-appended
+  // bind-mounted file — stat AND reads, file- and dir-mounts alike — at its
+  // container-start state, recovering only at idle. A FRESH container always
+  // reads truth at mount establishment, so when the in-place slice comes back
+  // empty and a relay is configured (canonical sweep topology: the eval-runner
+  // has /var/run/docker.sock + docker CLI baked), fetch the slice through a
+  // throwaway container with a fresh mount of the HOST log path.
+  if (!text) {
+    const env = opts.env ?? process.env;
+    const hostLog = env.OPENCODE_LLAMA_LOG_HOST;
+    const image = env.OPENCODE_TIMINGS_RELAY_IMAGE;
+    if (hostLog && image) {
+      const relayFn = opts.relayFn ?? relayReadSliceViaDocker;
+      const relayed = relayFn(hostLog, cursor.byteStart, image);
+      if (relayed != null) {
+        console.error(
+          `[opencode_server_timings] in-place log slice empty at close ` +
+          `(byteStart=${cursor.byteStart}, byteEnd=${cursor.byteEnd}) — virtiofs ` +
+          `freeze suspected; relay read via fresh-mount container returned ` +
+          `${relayed.length} bytes from ${hostLog}`,
+        );
+        text = relayed;
+      }
+    }
+  }
   return parseServerLogTimings(text);
+}
+
+/**
+ * Read everything past `byteStart` of a HOST file through a throwaway docker
+ * container with a fresh bind mount (fresh mount session ⇒ fresh view even
+ * mid-freeze; see captureServerTimings). Returns the slice text, '' when the
+ * host file has nothing past `byteStart`, or null when the relay itself failed
+ * (no docker, bad image, mount error) — callers treat null as "no better data".
+ * @param {string} hostLogPath  host-side path (the driver's $HOST_LLAMA_LOG)
+ * @param {number} byteStart
+ * @param {string} image        a locally-present image with `tail` (the driver
+ *                              passes the eval-runner image it just ran)
+ * @returns {string|null}
+ */
+export function relayReadSliceViaDocker(hostLogPath, byteStart, image) {
+  try {
+    const out = execFileSync(
+      'docker',
+      [
+        'run', '--rm',
+        '-v', `${hostLogPath}:/oc-relay-log:ro`,
+        '--entrypoint', 'tail',
+        image,
+        '-c', `+${(byteStart ?? 0) + 1}`,
+        '/oc-relay-log',
+      ],
+      { maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 },
+    );
+    return out.toString('utf8');
+  } catch (e) {
+    console.error(
+      `[opencode_server_timings] relay read failed for ${hostLogPath} ` +
+      `(image ${image}): ${e?.message ?? e}`,
+    );
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -318,7 +484,7 @@ export function normalizeProxyRecords(rawRecords) {
 }
 
 // ---------------------------------------------------------------------------
-// Join — attach server timings to iteration records (ordinal pairing).
+// Join — attach server timings to iteration records (token-keyed, #008).
 // ---------------------------------------------------------------------------
 
 const SERVER_FIELDS = [
@@ -328,6 +494,13 @@ const SERVER_FIELDS = [
   'server_queue_ms',
   'server_tokens_per_second',
 ];
+
+// #008 token-match tolerance (per field, in tokens). Client- and server-side
+// token accounting can each disagree by a BOS/EOS/stop token (off-by-one on
+// either side), while DISTINCT requests in the same session differ by whole
+// messages (tens-to-hundreds of prompt tokens). 2 absorbs the bookkeeping
+// noise without ever bridging the gap between two different requests.
+export const TOKEN_MATCH_TOLERANCE = 2;
 
 function blankServerFields() {
   return {
@@ -341,23 +514,89 @@ function blankServerFields() {
   };
 }
 
+function isLogUnreadableMarker(rec) {
+  return !!rec && rec.join_error === 'log_unreadable';
+}
+
+// Token key of a parsed timing block: prompt-eval'd (uncached) tokens + decoded
+// tokens, straight off the log lines / proxy `timings` JSON.
+function blockTokenKey(t) {
+  return {
+    prompt: numOrNull(t?.prompt_tokens),
+    decode: numOrNull(t?.decode_tokens),
+  };
+}
+
+// Token key of a schema-v1 iteration record. `input_tokens` is the UNCACHED
+// input count (ws020 evidence: total = input + output + cache.read), so it
+// lines up with the block's prompt-eval token count. The server decodes
+// reasoning tokens like any others, so the decode key is output + reasoning.
+function iterTokenKey(it) {
+  const prompt = numOrNull(it?.input_tokens);
+  const output = numOrNull(it?.output_tokens);
+  const reasoning = numOrNull(it?.reasoning_tokens) ?? 0;
+  return { prompt, decode: output == null ? null : output + reasoning };
+}
+
+// A block matches an iteration when at least one token field is comparable
+// (non-null on BOTH sides) and EVERY comparable field agrees within `tol`.
+function tokenKeyMatches(blockKey, iterKey, tol) {
+  let comparable = 0;
+  if (blockKey.prompt != null && iterKey.prompt != null) {
+    comparable += 1;
+    if (Math.abs(blockKey.prompt - iterKey.prompt) > tol) return false;
+  }
+  if (blockKey.decode != null && iterKey.decode != null) {
+    comparable += 1;
+    if (Math.abs(blockKey.decode - iterKey.decode) > tol) return false;
+  }
+  return comparable > 0;
+}
+
 /**
- * Join normalized server-timing records onto iteration records by ordinal
- * position (k-th timing -> k-th iteration). The phase-swap topology guarantees
- * a single server + single client, so completion order == iteration order.
+ * Join normalized server-timing records onto iteration records, keyed on the
+ * token counts BOTH sides already carry (#008): blocks have
+ * `prompt_tokens`/`decode_tokens`, iterations have `input_tokens`/
+ * `output_tokens` (+`reasoning_tokens`). Pure ordinal pairing is systematically
+ * wrong: OpenCode fires a session-title request (`agent=title`, `small=true`)
+ * to the SAME server before the first build iteration (ws020 evidence), so a
+ * run's log slice carries n_iterations+1 blocks and the k-th block belongs to
+ * request k−1.
  *
- * Returns shallow-copied iterations with the server_* fields filled, plus a
- * `join_status` mirroring the claw vocabulary:
- *   - 'disabled'           capture flag off; no fields added
- *   - 'no_server_timings'  enabled but zero timing records parsed (fields null)
- *   - 'ok'                 counts equal
- *   - 'count_mismatch'     counts differ; min(len) paired, rest null
+ * Matching is order-preserving and greedy: for each iteration (in order), scan
+ * forward from just past the previously matched block and attach the first
+ * exact token match, falling back to the first match within
+ * `opts.tokenTolerance` (default TOKEN_MATCH_TOLERANCE = 2) tokens per field.
+ * Unmatched blocks (title/summarize traffic) stay unattached; an iteration
+ * whose block is genuinely missing gets nulls WITHOUT shifting its neighbors.
+ *
+ * Legacy ordinal fallback: when token keying is IMPOSSIBLE — no block or no
+ * iteration carries any token count (injected/legacy records) — the join falls
+ * back to the pre-#008 ordinal pairing (k-th block → k-th iteration,
+ * `join_keying: 'ordinal_fallback'`). Real log/proxy blocks always carry token
+ * counts, so production runs always take the token-keyed path.
+ *
+ * `join_status` vocabulary (claw-derived; documented in
+ * docs/OPENCODE-SERVER-TIMINGS.md — keep in sync):
+ *   - 'disabled'           capture flag off; no server fields added
+ *   - 'no_server_timings'  enabled, log readable, but zero timing records
+ *                          parsed from the run's slice (fields null)
+ *   - 'log_unreadable'     enabled but the log was missing/unreadable at
+ *                          cursor-open (#007 fail-loud; fields null)
+ *   - 'ok'                 every iteration matched its own request's block
+ *                          (extra unattached title/summarize blocks allowed)
+ *   - 'count_mismatch'     ≥1 iteration could not be attributed a block
+ *                          (genuinely missing/unattributable; that iteration's
+ *                          fields are null, neighbors unaffected)
  *
  * @param {Array<object>} iterations
  * @param {Array<object>} timings
- * @param {{ enabled?: boolean }} [opts]
+ * @param {{ enabled?: boolean, tokenTolerance?: number }} [opts]
  * @returns {{ iterations: Array<object>, join_status: string,
- *             n_iterations: number, n_timings: number, n_matched: number }}
+ *             join_keying: 'token'|'ordinal_fallback'|null,
+ *             join_error: string|null,
+ *             n_iterations: number, n_timings: number, n_matched: number,
+ *             n_unmatched_timings: number }}
  */
 export function joinServerTimings(iterations, timings, opts = {}) {
   const iters = Array.isArray(iterations) ? iterations : [];
@@ -367,37 +606,120 @@ export function joinServerTimings(iterations, timings, opts = {}) {
     return {
       iterations: iters.map((it) => ({ ...it })),
       join_status: 'disabled',
+      join_keying: null,
+      join_error: null,
       n_iterations: iters.length,
       n_timings: 0,
       n_matched: 0,
+      n_unmatched_timings: 0,
     };
   }
 
-  const tims = Array.isArray(timings) ? timings : [];
-  const n = Math.min(iters.length, tims.length);
+  const rawTims = Array.isArray(timings) ? timings : [];
+  const markers = rawTims.filter(isLogUnreadableMarker);
+  const tims = rawTims.filter((t) => !isLogUnreadableMarker(t));
+
+  const blankAll = () => iters.map((it) => ({ ...it, ...blankServerFields() }));
+
+  // #007 fail-loud: the cursor said the log was unreadable at open time — a
+  // misconfiguration, NOT a quiet server. Distinct from 'no_server_timings'.
+  if (markers.length > 0) {
+    return {
+      iterations: blankAll(),
+      join_status: 'log_unreadable',
+      join_keying: null,
+      join_error: markers[0].error ?? 'server log unreadable at cursor-open',
+      n_iterations: iters.length,
+      n_timings: tims.length,
+      n_matched: 0,
+      n_unmatched_timings: tims.length,
+    };
+  }
+
+  if (tims.length === 0) {
+    return {
+      iterations: blankAll(),
+      join_status: 'no_server_timings',
+      join_keying: null,
+      join_error: null,
+      n_iterations: iters.length,
+      n_timings: 0,
+      n_matched: 0,
+      n_unmatched_timings: 0,
+    };
+  }
+
+  const blockKeys = tims.map(blockTokenKey);
+  const iterKeys = iters.map(iterTokenKey);
+  const keyingPossible =
+    blockKeys.some((k) => k.prompt != null || k.decode != null) &&
+    iterKeys.some((k) => k.prompt != null || k.decode != null);
+
+  const attach = (base, t) => {
+    for (const f of SERVER_FIELDS) base[f] = t[f] ?? null;
+    base.server_timing_source = t.source ?? null;
+    base.server_timing_task_id = t.task_id ?? null;
+  };
+
+  if (!keyingPossible) {
+    // Legacy ordinal pairing (pre-#008 semantics) — only reachable with
+    // token-less injected/legacy records; real blocks always carry counts.
+    const n = Math.min(iters.length, tims.length);
+    const joined = iters.map((it, k) => {
+      const base = { ...it, ...blankServerFields() };
+      if (k < n) attach(base, tims[k]);
+      return base;
+    });
+    return {
+      iterations: joined,
+      join_status: iters.length === tims.length ? 'ok' : 'count_mismatch',
+      join_keying: 'ordinal_fallback',
+      join_error: null,
+      n_iterations: iters.length,
+      n_timings: tims.length,
+      n_matched: n,
+      n_unmatched_timings: tims.length - n,
+    };
+  }
+
+  // Token-keyed, order-preserving greedy match. `cursor` only advances past a
+  // MATCHED block, so an iteration whose block is missing fails to match
+  // without consuming the next iteration's block (no neighbor shift), and
+  // leading/interleaved title blocks are simply skipped.
+  const tol = numOrNull(opts.tokenTolerance) ?? TOKEN_MATCH_TOLERANCE;
+  const matchedBlockFor = new Array(iters.length).fill(-1);
+  let cursor = 0;
+  for (let k = 0; k < iters.length; k += 1) {
+    let exact = -1;
+    let loose = -1;
+    for (let j = cursor; j < tims.length && exact === -1; j += 1) {
+      if (tokenKeyMatches(blockKeys[j], iterKeys[k], 0)) exact = j;
+      else if (loose === -1 && tokenKeyMatches(blockKeys[j], iterKeys[k], tol)) loose = j;
+    }
+    const pick = exact !== -1 ? exact : loose;
+    if (pick !== -1) {
+      matchedBlockFor[k] = pick;
+      cursor = pick + 1;
+    }
+  }
 
   const joined = iters.map((it, k) => {
     const base = { ...it, ...blankServerFields() };
-    if (k < n) {
-      const t = tims[k];
-      for (const f of SERVER_FIELDS) base[f] = t[f] ?? null;
-      base.server_timing_source = t.source ?? null;
-      base.server_timing_task_id = t.task_id ?? null;
-    }
+    if (matchedBlockFor[k] !== -1) attach(base, tims[matchedBlockFor[k]]);
     return base;
   });
-
-  let status;
-  if (tims.length === 0) status = 'no_server_timings';
-  else if (iters.length === tims.length) status = 'ok';
-  else status = 'count_mismatch';
+  const nMatched = matchedBlockFor.filter((j) => j !== -1).length;
 
   return {
     iterations: joined,
-    join_status: status,
+    join_status:
+      iters.length > 0 && nMatched === iters.length ? 'ok' : 'count_mismatch',
+    join_keying: 'token',
+    join_error: null,
     n_iterations: iters.length,
     n_timings: tims.length,
-    n_matched: n,
+    n_matched: nMatched,
+    n_unmatched_timings: tims.length - nMatched,
   };
 }
 

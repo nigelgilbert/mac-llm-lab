@@ -10,7 +10,9 @@
 #
 # Usage:
 #   oc                       interactive TUI on $PWD (default tier 64)
-#   oc run "<prompt>" [...]  headless one-shot ($* passed to `opencode run`)
+#   oc run "<prompt>" [...]  headless one-shot ($* passed to `opencode run`
+#                            after a `--` separator: every arg is prompt text,
+#                            dash-leading prompts can't parse as flags)
 #   oc probe                 injection wire-capture oracle (#001): proves the
 #                            global AGENTS.md actually lands in the agent
 #                            system prompt, via an in-container mock endpoint
@@ -149,6 +151,13 @@ assert_config() {
   [[ -f "$CONFIG_JSON" && -r "$CONFIG_JSON" ]] || die2 "opencode config missing/unreadable: $CONFIG_JSON
   Without it the container would fall back to the default tier-64 config and
   silently dial the wrong server port."
+  # absolute path for the compose bind mount (#014): compose resolves a
+  # relative source against --project-directory (client/opencode), NOT the
+  # caller's cwd — so a relative override would pass the check above yet
+  # bind-mount a nonexistent path that docker auto-creates as an empty
+  # DIRECTORY over /root/.config/opencode/opencode.json (the same trap
+  # assert_prompt already closes for PROMPT_FILE).
+  CONFIG_JSON="$(cd "$(dirname "$CONFIG_JSON")" && pwd)/$(basename "$CONFIG_JSON")"
 }
 
 # --- tier server lifecycle ---------------------------------------------------
@@ -243,11 +252,16 @@ cmd_status() {
 }
 
 # Injection wire-capture oracle (#001's deterministic replacement for the
-# flaky behavioral PROOF check): point OpenCode at an in-container localhost
-# mock that records the /v1/chat/completions request body, run a trivial
-# prompt THROUGH THE NORMAL oc CONTAINER PATH (same prompt mount), then grep
-# the captured body for the AGENTS.md attribution line OpenCode emits when the
-# global prompt is actually injected.
+# flaky behavioral PROOF check, content-true since #014): point OpenCode at an
+# in-container localhost mock that records the /v1/chat/completions request
+# body, mount a probe copy of the resolved global prompt with a unique
+# SENTINEL line appended at the END, run a trivial prompt THROUGH THE NORMAL
+# oc CONTAINER PATH (same mount target, same compose service), then require
+# the sentinel in the captured body. Sentinel-at-the-tail is the oracle:
+# it proves the prompt content itself (through its last line) reached the
+# model request — a truncated injection fails, and an upstream rewording of
+# the "Instructions from:" attribution line cannot false-fail the probe (the
+# attribution grep is kept as a secondary diagnostic only).
 cmd_probe() {
   assert_prompt
   local ws cfg
@@ -283,20 +297,38 @@ http.createServer((req, res) => {
   });
 }).listen(9099, '127.0.0.1');
 EOF
+  # Probe prompt = byte-identical copy of the resolved prompt + a unique
+  # sentinel appended as the LAST line (#014). Same mount path, same injection
+  # mechanism — but now the wire capture must contain content we planted.
+  local sentinel probe_prompt
+  sentinel="OC-PROBE-SENTINEL-$(date +%s)-$$-$RANDOM"
+  probe_prompt="$ws/AGENTS.probe.md"
+  cat "$PROMPT_FILE" > "$probe_prompt"
+  printf '\n%s\n' "$sentinel" >> "$probe_prompt"
   echo "oc: probe: prompt source = $PROMPT_FILE [$PROMPT_ORIGIN]" >&2
+  echo "oc: probe: sentinel = $sentinel (appended to probe copy $probe_prompt)" >&2
   echo "oc: probe: workspace = $ws (kept on failure)" >&2
   # Drive it through the standard container path: same compose service, same
-  # AGENTS.md mount — only $PWD and the config are swapped for the mock.
-  local saved_pwd="$INVOKE_PWD" saved_cfg="${CONFIG_JSON:-}"
-  INVOKE_PWD="$ws" CONFIG_JSON="$cfg" run_container \
-    sh -c 'node /workspace/_mock.js & sleep 1; timeout 90 opencode run "say hi" >/dev/null 2>&1; true' || true
-  INVOKE_PWD="$saved_pwd"; CONFIG_JSON="$saved_cfg"
-  if [[ -s "$ws/_capture.jsonl" ]] && grep -q "Instructions from: $CONTAINER_PROMPT_PATH" "$ws/_capture.jsonl"; then
-    echo "oc: probe PASS — agent system prompt contains 'Instructions from: $CONTAINER_PROMPT_PATH'"
+  # AGENTS.md mount target — only $PWD, the config and the prompt copy are
+  # swapped in for the mock.
+  local saved_pwd="$INVOKE_PWD" saved_cfg="${CONFIG_JSON:-}" saved_prompt="$PROMPT_FILE"
+  INVOKE_PWD="$ws" CONFIG_JSON="$cfg" PROMPT_FILE="$probe_prompt" run_container \
+    sh -c 'node /workspace/_mock.js & sleep 1; timeout 90 opencode run -- "say hi" >/dev/null 2>&1; true' || true
+  INVOKE_PWD="$saved_pwd"; CONFIG_JSON="$saved_cfg"; PROMPT_FILE="$saved_prompt"
+  if [[ -s "$ws/_capture.jsonl" ]] && grep -q "$sentinel" "$ws/_capture.jsonl"; then
+    echo "oc: probe PASS — captured request body contains the planted prompt sentinel ($sentinel)"
+    # Secondary diagnostic only — never gates (#014): a missing attribution
+    # line with a delivered sentinel means upstream reworded its phrasing.
+    if ! grep -q "Instructions from: $CONTAINER_PROMPT_PATH" "$ws/_capture.jsonl"; then
+      echo "oc: probe note: attribution line 'Instructions from: $CONTAINER_PROMPT_PATH' absent (upstream wording change?) — sentinel proves injection regardless" >&2
+    fi
     rm -rf "$ws"
     return 0
   fi
-  echo "oc: probe FAIL — the global prompt did NOT reach the agent system prompt." >&2
+  echo "oc: probe FAIL — the planted prompt sentinel did NOT reach the captured request body." >&2
+  if grep -q "Instructions from: $CONTAINER_PROMPT_PATH" "$ws/_capture.jsonl" 2>/dev/null; then
+    echo "  (attribution line IS present without the sentinel — prompt content truncated/dropped in flight)" >&2
+  fi
   echo "  capture: $ws/_capture.jsonl ($(wc -c < "$ws/_capture.jsonl" 2>/dev/null || echo 0) bytes)" >&2
   exit 2
 }
@@ -315,7 +347,10 @@ note_workspace
 if [[ "$SUBCMD" == "run" ]]; then
   [[ $# -ge 1 ]] || die "oc run needs a prompt: oc run \"<prompt>\""
   echo "oc: tier-$TIER (:$PORT) | workspace $INVOKE_PWD | prompt [$PROMPT_ORIGIN]" >&2
-  rc=0; run_container opencode run "$@" || rc=$?
+  # `--` ends opencode's flag parsing (verified in-container, #014): without it
+  # a dash-leading prompt parses as CLI flags (e.g. "--demo ..." silently flips
+  # a real flag) instead of reaching the model as a prompt.
+  rc=0; run_container opencode run -- "$@" || rc=$?
   stop_on_demand; trap - EXIT
   exit "$rc"
 else

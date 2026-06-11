@@ -133,7 +133,10 @@ export function dockerComposeArgv({ composeFile, containerName, prompt, dockerBi
       // --name: deterministic name so the timeout reap can `docker rm -f` it.
       'run', '--rm', '-T', '--name', containerName, ...mountFlags,
       'opencode',          // the compose service
-      'opencode', 'run', prompt,   // the in-container command
+      // The in-container command. `--` ends opencode's flag parsing (#014,
+      // verified in-container on 1.16.2): a dash-leading prompt is delivered
+      // literally instead of being parsed as CLI flags.
+      'opencode', 'run', '--', prompt,
     ],
   };
 }
@@ -396,7 +399,8 @@ export function runOpenCode({
  * reporter to assemble a row (run_id, test_id, timestamps, terminal_status,
  * exit_code, iters_count=0). Best-effort — never throws; on a
  * write hiccup the path is still returned and runAgent's runDir guard / the
- * expected-attempts diff catch the missing sidecar.
+ * driver's post-gate expected-attempts row audit (#003, run-config-ab.sh)
+ * catch the missing sidecar.
  */
 function writeSidecar({ runtimeRoot, runId, runStartedMs, runFinishedMs, code, timeout, timeoutMs, interrupted = false, spawnError = null }) {
   const runDir = path.join(runtimeRoot, runId);

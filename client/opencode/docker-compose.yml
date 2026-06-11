@@ -23,6 +23,16 @@ services:
       # #019 sweep bug. The port lives in the JSON, not here.
       - ${OPENCODE_CONFIG_JSON:-./opencode.json}:/root/.config/opencode/opencode.json:ro
     working_dir: /workspace
+    # Sweep-scoped reap handle (#004). run-config-ab.sh generates a per-sweep
+    # OC_SWEEP_ID and forwards it into the eval-runner env; runOpenCode's
+    # `docker compose run` spawn inherits process.env, so compose interpolates
+    # it here and every oc-run-* sibling the sweep spawns carries the label.
+    # The driver's per-cell timeout reap and end-of-sweep trap filter on
+    # `label=mac-llm-lab.sweep=<id>` — NEVER the bare oc-run- name prefix — so
+    # containers from other sweeps or manual runs (OC_SWEEP_ID unset → empty
+    # label value, which a non-empty filter never matches) are left alone.
+    labels:
+      - "mac-llm-lab.sweep=${OC_SWEEP_ID:-}"
     environment:
       # CRA reads HOST; harmless for others. Vite/Next still need their own --host
       # flag. Mirrors claw-code so the shared task suite behaves the same here.

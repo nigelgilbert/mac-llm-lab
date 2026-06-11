@@ -69,14 +69,24 @@ cmd_install() {
   fi
   # OpenCode serving (migration decision §2.5): the launchd resident
   # llama-server for the chosen tier. Self-skips in client-only topology.
-  step_51_main
+  # Guarded like 52/53/54 (#011): a failed serving install must abort the
+  # wizard — without this, a missing GGUF / never-green /health printed one
+  # red ✗ and the wizard still reached "Done", exit 0, with no daemon.
+  step_51_main || { fail "opencode serving install failed — no working tier server"; return 1; }
   # OpenCode client (#007): container image + tier configs, global prompt
   # (~/.config/opencode/AGENTS.md), `oc` wrapper on PATH. Both topologies.
   step_52_main || { fail "opencode client image/config step failed"; return 1; }
   step_53_main || { fail "global prompt install failed"; return 1; }
   step_54_main || { fail "oc wrapper install failed"; return 1; }
   # Smoke (61): injection wire-capture probe + a real `oc run` artifact.
-  step_61_main || true
+  # Never swallowed (#011): an installer that exits 0 must mean everything
+  # it installed works. (61 itself SKIPs rc=0 when client-only has no
+  # reachable LAN host — install complete, live verification deferred.)
+  step_61_main || {
+    fail "end-to-end smoke FAILED — stack installed but NOT verified"
+    printf "  log: %s\n\n" "$(log_path)"
+    return 1
+  }
   hdr "Done"
   printf "  log: %s\n\n" "$(log_path)"
 }

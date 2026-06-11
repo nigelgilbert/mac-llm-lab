@@ -63,6 +63,30 @@
 # bug" died with the claw phase: every arm AND the gate now address the same
 # absolute host path through the path-matched repo mount.)
 #
+# ── Row accountability (#003) ───────────────────────────────────────────────
+# Before the arms phase the driver writes an expected-attempts plan
+# (TASKS × REPEATS × ARMS via scripts/expected-attempts.mjs plan) and snapshots
+# the registry's line count as a watermark. After the gate it diffs the rows
+# appended past the watermark against the plan: any planned (task, config, rep)
+# cell with no row — reporter SIGTERM window, missing runDir, sidecar hiccup,
+# per-cell timeout kill — is named and turns the sweep red. Under REUSE_ROWS=1
+# the watermark confines the audit to THIS sweep's fresh rows.
+#
+# Exit code (#003): nonzero if ANY phase failed; precedence when several did:
+#   1 = arm sub-phase failure (a cell rc'd nonzero or a sub-phase wedged)
+#   2 = row shortfall (expected-attempts diff found missing/over-emitted cells)
+#   3 = pairing-gate failure
+# (Preflight/setup errors exit 1 via err() before any phase runs.)
+#
+# ── Per-cell timeout reap (#004) ────────────────────────────────────────────
+# Every oc-run-* sibling this sweep spawns carries the docker label
+# `mac-llm-lab.sweep=$OC_SWEEP_ID` (compose service label interpolated from the
+# env the driver forwards into the eval-runner). When the per-cell `timeout`
+# cap kills a cell, the killed node chain never reaps its sibling — the driver
+# loop reaps every container with THIS sweep's label immediately, and the
+# end-of-sweep trap uses the same filter, so containers from other sweeps or
+# manual runs (no/other label) are never touched.
+#
 # ── Knobs (env) ─────────────────────────────────────────────────────────────
 #   SMOKE_TESTS        space-separated tier-eval test_id stems   (default: deep-equal)
 #   CONFIG_AB_REPEATS  runs per cell per arm (→ N per bucket)    (default: 1)
@@ -73,6 +97,19 @@
 #   REUSE_ROWS         1 = append to existing REGISTRY_OUT       (default: 0)
 #   REGISTRY_OUT       explicit shared-registry path             (default: auto-timestamped)
 #   RUNNER_IMAGE       baked eval-runner image (#009)            (default: mac-llm-lab-eval-runner:local)
+#   OPENCODE_SERVER_TIMINGS  1 = #007 server-timings plumbing: forward the flag
+#              into the eval-runner, bind-mount the tier's llama-server log
+#              READ-ONLY at /var/log/opencode-llama-server.log and point
+#              OPENCODE_LLAMA_LOG at it. ALSO arms the host-slice repair pass:
+#              a host-side ticker indexes the log's size every ~3s during each
+#              arm, and post-arm any fresh runDir that closed with the
+#              virtiofs-freeze signature (server_timings_join_status
+#              'no_server_timings') gets its run window re-sliced FROM THE
+#              HOST log (host processes always see truth) into
+#              <runDir>/server-log.slice and re-joined via
+#              scripts/repair-server-timings.mjs. Unset/0 (default): no mount,
+#              no env, no ticker, no slice files — exactly the flag-off
+#              behavior.
 #
 # Examples:
 #   # one-cell smoke of the default arm on the resident tier-64 daemon:
@@ -116,10 +153,13 @@ http() { curl -s -o /dev/null -w '%{http_code}' "$1" 2>/dev/null || echo 000; }
 # Each arm MUST get the matching config or OpenCode dials the wrong port and
 # every cell ConnectionRefused-loops to timeout (iters=1, 0 tokens). Consumed
 # by client/opencode/docker-compose.yml's ${OPENCODE_CONFIG_JSON} mount.
+# OC_LOG_TAG mirrors opencode-server's per-tier TAG ("" | -16 | -32): it names
+# the host llama-server log /tmp/opencode-llama-server${TAG}.log for the #007
+# server-timings mount below — same derivation, never guessed.
 case "$TIER" in
-  64) OC_PORT=11436; OC_CONFIG_JSON=./opencode.json ;;
-  16) OC_PORT=11437; OC_CONFIG_JSON=./opencode.16.json ;;
-  32) OC_PORT=11438; OC_CONFIG_JSON=./opencode.32.json ;;
+  64) OC_PORT=11436; OC_CONFIG_JSON=./opencode.json;    OC_LOG_TAG="" ;;
+  16) OC_PORT=11437; OC_CONFIG_JSON=./opencode.16.json; OC_LOG_TAG="-16" ;;
+  32) OC_PORT=11438; OC_CONFIG_JSON=./opencode.32.json; OC_LOG_TAG="-32" ;;
   *)  err "TIER=$TIER is not a known tier (64 | 16 | 32)" ;;
 esac
 OC_HEALTH="http://127.0.0.1:$OC_PORT/health"
@@ -127,6 +167,12 @@ OC_HEALTH="http://127.0.0.1:$OC_PORT/health"
 # Shared registry every arm appends to (path-matched → same host file in every
 # sibling). Lives under the gitignored runtime root by convention.
 STAMP="$(date +%Y%m%d-%H%M%S)"
+# Sweep identity (#004): forwarded into the eval-runner env; runOpenCode's
+# `docker compose run` inherits it and the compose service's
+# `mac-llm-lab.sweep=${OC_SWEEP_ID:-}` label stamps it onto every oc-run-*
+# sibling THIS sweep spawns. The per-cell timeout reap and the cleanup trap
+# filter on this exact label value — never on the bare oc-run- name prefix.
+OC_SWEEP_ID="config-ab-${STAMP}-$$"
 CLAW_RT_DIR="$REPO_DIR/host/test/.claw-runtime"
 HOST_REG="${REGISTRY_OUT:-$CLAW_RT_DIR/run_registry.config-ab-${STAMP}.jsonl}"
 case "$HOST_REG" in
@@ -170,12 +216,23 @@ docker image inspect "$RUNNER_IMAGE" >/dev/null 2>&1 \
 # instead of duplicating the enum in bash: every arm must be RUNNABLE
 # (OPENCODE_CONFIGS); the baseline must be a VALID config_id (it may be a
 # historical, non-runnable one — e.g. claw-rig rows in a reused registry).
+#
+# Arm×tier coverage (#006): membership alone is NOT enough — the emit path
+# auto-picks modelConfigIdFor({configId, tier}) per row (the driver unsets
+# RUN_REGISTRY_MODEL_CONFIG_ID by design), and an unmapped (arm, tier) pair
+# (e.g. opencode-a+prompt × 64) throws only post-cell inside the swallowed
+# emit, so every cell would burn its full agent wall-clock and emit ZERO rows.
+# Resolve every (arm, tier) — plus (BASELINE, tier); a non-opencode baseline
+# returns undefined without throwing — and die HERE, before any server or arm
+# container, naming the exact missing pair(s).
 docker run --rm -v "$REPO_DIR:$REPO_DIR" -w "$REPO_DIR/host/test" \
-  -e ARMS="$ARMS" -e BASELINE="$BASELINE" -e CONFIG_JS="$REPO_DIR/host/test/lib/config.js" \
+  -e ARMS="$ARMS" -e BASELINE="$BASELINE" -e TIER="$TIER" \
+  -e CONFIG_JS="$REPO_DIR/host/test/lib/config.js" \
   --entrypoint node "$RUNNER_IMAGE" -e '
-    import(process.env.CONFIG_JS).then(({ VALID_CONFIGS, OPENCODE_CONFIGS }) => {
+    import(process.env.CONFIG_JS).then(({ VALID_CONFIGS, OPENCODE_CONFIGS, modelConfigIdFor }) => {
       const arms = process.env.ARMS.trim().split(/\s+/);
       const baseline = process.env.BASELINE;
+      const tier = process.env.TIER;
       const bad = arms.filter((a) => !OPENCODE_CONFIGS.includes(a));
       if (bad.length) {
         console.error(`ARMS entries not runnable (must be in OPENCODE_CONFIGS {${OPENCODE_CONFIGS.join(", ")}}): ${bad.join(", ")}`);
@@ -185,23 +242,78 @@ docker run --rm -v "$REPO_DIR:$REPO_DIR" -w "$REPO_DIR/host/test" \
         console.error(`BASELINE "${baseline}" not in VALID_CONFIGS {${VALID_CONFIGS.join(", ")}}`);
         process.exit(1);
       }
+      const missing = [];
+      for (const id of [...new Set([...arms, baseline])]) {
+        try { modelConfigIdFor({ configId: id, tier }); }
+        catch (e) { missing.push(`${id} × ${tier}`); }
+      }
+      if (missing.length) {
+        console.error(`arm×tier preflight (#006): no model_config_id mapped for: ${missing.join(", ")} — every cell of such an arm would burn its wall-clock and emit zero rows (the emit-time modelConfigIdFor throw is post-cell). Map the tier in lib/config.js (OPENCODE_*_MODEL_CONFIG_ID_BY_TIER) or drop the arm.`);
+        process.exit(1);
+      }
     });
-  ' || err "ARMS/BASELINE validation failed (see message above)"
+  ' || err "ARMS/BASELINE/arm×tier validation failed (see message above)"
+
+# Expected-attempts plan (#003): enumerate every (task, config, rep) cell this
+# sweep intends to attempt — written BEFORE the arms phase so the post-gate
+# diff audits observed rows against intent, not against whatever survived.
+# Also doubles as a stem preflight: an unknown or non-emit-eligible
+# SMOKE_TESTS stem (Family C probes emit no row) dies here, pre-server.
+PLAN_CSV="$CLAW_RT_DIR/expected_attempts.${OC_SWEEP_ID}.csv"
+docker run --rm -v "$REPO_DIR:$REPO_DIR" -w "$REPO_DIR/host/test" \
+  --entrypoint node "$RUNNER_IMAGE" scripts/expected-attempts.mjs plan \
+  --tests-dir "$REPO_DIR/host/test/__tests__/tier-eval" \
+  --tiers "$TIER" --configs "$ARMS" --reps "$REPEATS" \
+  --filter "$SMOKE_TESTS" --out "$PLAN_CSV" \
+  || err "expected-attempts plan failed (see message above)"
+
+# Fresh-row watermark (#003): the registry's line count BEFORE this sweep
+# appends anything. The post-gate diff passes it as --since-line so under
+# REUSE_ROWS=1 only THIS sweep's rows are audited against the plan (pre-
+# existing baseline rows neither satisfy nor inflate it). Rows are appended
+# one '\n'-terminated JSON line each (lib/registry.js), so wc -l is exact.
+REG_WATERMARK=0
+if [ -s "$HOST_REG" ]; then
+  REG_WATERMARK="$(wc -l < "$HOST_REG" | tr -d ' ')"
+fi
 
 # ---- cleanup-on-exit: leave the lab as found -------------------------------
 STARTED_OC=0      # set to 1 iff we start the oc server (→ we stop it)
+# #007 host-slice repair state (initialized BEFORE the trap so cleanup can
+# reference them unconditionally under set -u; armed only when
+# OPENCODE_SERVER_TIMINGS=1 — see the timings block below).
+TIMINGS_INDEX=""
+TIMINGS_TICKER_PID=""
+ARM_STAMP=""
 cleanup() {
   local rc=$?
   log ""
   log "[cleanup] restoring lab state (driver rc=$rc)..."
 
-  # Reap any sibling run containers this sweep may have orphaned (a wedged
+  # #007: no orphan host tickers — the per-arm stop is the normal path; this
+  # is the backstop for a sweep dying mid-arm (err/INT/TERM). Inline (not the
+  # helper function) so the trap is safe even before the helpers are defined.
+  if [ -n "${TIMINGS_TICKER_PID:-}" ]; then
+    kill "$TIMINGS_TICKER_PID" 2>/dev/null || true
+    wait "$TIMINGS_TICKER_PID" 2>/dev/null || true
+    TIMINGS_TICKER_PID=""
+  fi
+  if [ -n "${ARM_STAMP:-}" ]; then
+    rm -f "$ARM_STAMP" 2>/dev/null || true
+  fi
+
+  # Reap any sibling run containers THIS sweep may have orphaned (a wedged
   # opencode run reaped by runOpenCode's own timeout normally clears these;
-  # this is the backstop for one that slipped through). Best-effort; never fatal.
+  # the per-cell timeout reap in the arm loop clears the cap-kill case; this
+  # is the backstop for one that slipped through). Scoped (#004) to this
+  # sweep's label — `mac-llm-lab.sweep=$OC_SWEEP_ID`, stamped by the compose
+  # service label — NEVER the bare oc-run- name prefix, so containers from a
+  # concurrent sweep or a manual `docker compose run` are left alone.
+  # Best-effort; never fatal.
   local orphans
-  orphans="$(docker ps -aq --filter 'name=oc-run-' 2>/dev/null || true)"
+  orphans="$(docker ps -aq --filter "label=mac-llm-lab.sweep=$OC_SWEEP_ID" 2>/dev/null || true)"
   if [ -n "$orphans" ]; then
-    log "[cleanup] reaping orphaned oc-run-* containers: $(echo "$orphans" | wc -l | tr -d ' ')"
+    log "[cleanup] reaping this sweep's orphaned oc-run-* containers (label mac-llm-lab.sweep=$OC_SWEEP_ID): $(echo "$orphans" | wc -l | tr -d ' ')"
     # shellcheck disable=SC2086
     docker rm -f $orphans >/dev/null 2>&1 || true
   fi
@@ -236,6 +348,131 @@ else
 fi
 [ "$(http "$OC_HEALTH")" = 200 ] || err "oc-$TIER not green at $OC_HEALTH"
 
+# ---- #007: server-timings plumbing (opt-in; flag off = exactly no-op) -------
+# When OPENCODE_SERVER_TIMINGS=1 on the host, the eval-runner needs to read the
+# tier's llama-server log (lib/opencode_server_timings.js log-cursor capture).
+# Host log path is derived EXACTLY as host/llama-server/scripts/opencode-server
+# does: the OPENCODE_LLAMA_LOG override wins, else /tmp/opencode-llama-server
+# + the tier TAG ("" | -16 | -32). Mounted READ-ONLY at a fixed container path
+# and pointed at via OPENCODE_LLAMA_LOG in the runner env. Checked after
+# server-up so an on-demand tier's freshly created log is visible.
+TIMINGS_ARGS=()
+if [ "${OPENCODE_SERVER_TIMINGS:-}" = 1 ]; then
+  HOST_LLAMA_LOG="${OPENCODE_LLAMA_LOG:-/tmp/opencode-llama-server${OC_LOG_TAG}.log}"
+  [ -f "$HOST_LLAMA_LOG" ] || err "OPENCODE_SERVER_TIMINGS=1 but the tier-$TIER llama-server log is missing: $HOST_LLAMA_LOG (derived as opencode-server does: OPENCODE_LLAMA_LOG override, else /tmp/opencode-llama-server${OC_LOG_TAG}.log). A bind mount of a missing file would silently become a directory — refusing."
+  TIMINGS_ARGS=(
+    -e OPENCODE_SERVER_TIMINGS=1
+    -v "$HOST_LLAMA_LOG:/var/log/opencode-llama-server.log:ro"
+    -e OPENCODE_LLAMA_LOG=/var/log/opencode-llama-server.log
+    # Virtiofs-freeze relay (T2 boundary, issues/WORKLOG.md): under sweep load
+    # OrbStack can freeze the runner's whole view of the mounted log; the
+    # capture then re-reads the slice through a throwaway container with a
+    # fresh mount of the HOST path, using this same runner image (present by
+    # preflight) over the already-mounted docker.sock.
+    -e OPENCODE_LLAMA_LOG_HOST="$HOST_LLAMA_LOG"
+    -e OPENCODE_TIMINGS_RELAY_IMAGE="$RUNNER_IMAGE"
+  )
+  # Host-slice repair plumbing (#007 final AC): under sweep load OrbStack's
+  # virtiofs can serve a FROZEN view of the host-appended log to ALL containers
+  # (stat AND reads, fresh mounts included — T2 diagnosis, issues/WORKLOG.md),
+  # so the in-container cursor AND the relay can both come up empty. Host
+  # processes always see truth: a background ticker appends
+  # "<epoch_ms> <host_log_size>" every ~3s to this per-sweep index while an
+  # arm runs; post-arm, frozen runDirs are re-sliced from the host log via the
+  # index (see repair_arm_timings below) into <runDir>/server-log.slice — the
+  # RETAINED canonical per-run server-log artifact (#002 greps the same file).
+  TIMINGS_INDEX="$CLAW_RT_DIR/server-log-index.${OC_SWEEP_ID}.txt"
+  ARM_STAMP="$CLAW_RT_DIR/.arm-start.${OC_SWEEP_ID}"
+  mkdir -p "$CLAW_RT_DIR"
+  : > "$TIMINGS_INDEX"
+  log "    server-timings ON: $HOST_LLAMA_LOG → /var/log/opencode-llama-server.log (ro; freeze-relay via $RUNNER_IMAGE)"
+  log "    server-timings host-slice repair armed: index $TIMINGS_INDEX (~3s ticks)"
+fi
+
+# ---- #007 host-slice repair helpers (no-ops unless TIMINGS_INDEX is set) ----
+OC_RT_ROOT="$REPO_DIR/client/opencode/.opencode-runtime"
+
+# Append "<epoch_ms> <host_log_size>" ticks while an arm runs. Host `date` on
+# macOS has no %N: second-granularity ×1000 is plenty for a ~3s cadence that
+# the window mapping pads by one tick on each side. Killing the subshell ends
+# the loop; an in-flight `sleep 3` orphan exits within 3s (no ticker survives
+# the sweep — the cleanup trap is the mid-arm backstop).
+start_timings_ticker() {
+  (
+    while :; do
+      sz="$(stat -f %z "$HOST_LLAMA_LOG" 2>/dev/null || echo 0)"
+      printf '%s %s\n' "$(( $(date +%s) * 1000 ))" "$sz" >> "$TIMINGS_INDEX"
+      sleep 3
+    done
+  ) &
+  TIMINGS_TICKER_PID=$!
+}
+
+stop_timings_ticker() {
+  if [ -n "${TIMINGS_TICKER_PID:-}" ]; then
+    kill "$TIMINGS_TICKER_PID" 2>/dev/null || true
+    wait "$TIMINGS_TICKER_PID" 2>/dev/null || true
+    TIMINGS_TICKER_PID=""
+  fi
+}
+
+# Post-arm repair: for each runDir this arm produced (run_summary.json newer
+# than the arm-start stamp) that closed with the freeze signature
+# (server_timings_join_status 'no_server_timings'), map its wall-clock window
+# to a host-log byte window via the tick index (window rule lives in
+# scripts/repair-server-timings.mjs — floor/ceil to the bracketing ticks, pad
+# one tick each side; the title request fires ~at run start so the leading pad
+# matters), extract the slice HOST-SIDE (truth even mid-freeze), and re-join
+# inside the runner image (no node on the host). Best-effort per runDir: a
+# failed repair leaves the honest 'no_server_timings' artifacts in place and
+# never reddens the sweep.
+repair_arm_timings() {
+  local rs rd window sb eb winsz eof_sz n_repaired=0 n_frozen=0
+  local summaries
+  summaries="$(find "$OC_RT_ROOT" -mindepth 2 -maxdepth 2 -name run_summary.json -newer "$ARM_STAMP" 2>/dev/null || true)"
+  if [ -z "$summaries" ]; then
+    log "[timings-repair] no fresh runDirs since arm start — nothing to inspect"
+    return 0
+  fi
+  for rs in $summaries; do
+    rd="$(dirname "$rs")"
+    # Freeze signature only. run_summary.json is JSON.stringify(_, null, 2),
+    # so the field sits alone on its line — grep is exact here. Outcome-only
+    # sidecars carry no server_timings_join_status and are skipped (nothing
+    # to repair: no transcript, no iterations to join).
+    grep -q '"server_timings_join_status": "no_server_timings"' "$rs" || continue
+    n_frozen=$((n_frozen + 1))
+    eof_sz="$(stat -f %z "$HOST_LLAMA_LOG" 2>/dev/null || echo 0)"
+    window="$(docker run --rm -v "$REPO_DIR:$REPO_DIR" -w "$REPO_DIR/host/test" \
+      --entrypoint node "$RUNNER_IMAGE" scripts/repair-server-timings.mjs window \
+      --run-dir "$rd" --index "$TIMINGS_INDEX" --eof "$eof_sz")" \
+      || { log "[timings-repair] window mapping FAILED for $rd (see node error above) — leaving as captured"; continue; }
+    sb="${window%% *}"
+    eb="${window##* }"
+    case "${sb}${eb}" in
+      ''|*[!0-9]*) log "[timings-repair] bad window '$window' for $rd — leaving as captured"; continue ;;
+    esac
+    winsz=$((eb - sb))
+    # HOST-side extraction: tail/head on the host log (host view is truth).
+    # head closing the pipe early can SIGPIPE tail under pipefail — the guard
+    # keeps an empty/short slice from killing the sweep.
+    if [ "$winsz" -gt 0 ]; then
+      tail -c +"$((sb + 1))" "$HOST_LLAMA_LOG" | head -c "$winsz" > "$rd/server-log.slice" || true
+    else
+      : > "$rd/server-log.slice"
+    fi
+    if docker run --rm -v "$REPO_DIR:$REPO_DIR" -w "$REPO_DIR/host/test" \
+        --entrypoint node "$RUNNER_IMAGE" scripts/repair-server-timings.mjs repair \
+        --run-dir "$rd"; then
+      n_repaired=$((n_repaired + 1))
+      log "[timings-repair] repaired $rd via host slice [$sb,$eb) (${winsz} bytes of $HOST_LLAMA_LOG)"
+    else
+      log "[timings-repair] repair FAILED for $rd — 'no_server_timings' artifacts left as captured"
+    fi
+  done
+  log "[timings-repair] arm summary: $n_frozen frozen runDir(s), $n_repaired repaired via host slice"
+}
+
 # Per-sweep shared workspace H, emptied IN PLACE. We deliberately do NOT
 # `rm -rf "$H" && mkdir` it: churning H's inode right before bind-mounting it can
 # leave OrbStack's file-share with a stale handle, so /workspace shows up EMPTY
@@ -267,6 +504,13 @@ ARMS_RC=0
 for ARM in $ARMS; do
 log ""
 log "==> arm $ARM (oc llama-server :$OC_PORT; filter: $FILTER)"
+# #007 host-slice repair: stamp the arm start (runDir discovery is
+# "run_summary.json newer than this") and tick the host log size while the
+# arm runs. Flag off → TIMINGS_INDEX is empty and nothing here fires.
+if [ -n "$TIMINGS_INDEX" ]; then
+  touch "$ARM_STAMP"
+  start_timings_ticker
+fi
 set +e
 docker run --rm \
   -v "$REPO_DIR:$REPO_DIR" -w "$REPO_DIR/host/test" \
@@ -276,6 +520,7 @@ docker run --rm \
   -e HOST_WORKSPACE="$H" \
   -e TIER="$TIER" \
   -e OPENCODE_CONFIG_JSON="$OC_CONFIG_JSON" \
+  -e OC_SWEEP_ID="$OC_SWEEP_ID" \
   -e TIER_EVAL_FILTER="$FILTER" \
   -e PER_TEST_TIMEOUT="$PER_TEST_TIMEOUT" \
   -e RUN_REGISTRY_EMIT=1 \
@@ -284,6 +529,7 @@ docker run --rm \
   -e RUN_REGISTRY_TESTS_DIR="$REPO_DIR/host/test/__tests__/tier-eval" \
   -e RUN_REGISTRY_PATH="$HOST_REG" \
   -e GIT_SHA="$GIT_SHA" \
+  ${TIMINGS_ARGS[@]+"${TIMINGS_ARGS[@]}"} \
   --entrypoint sh "$RUNNER_IMAGE" -c '
     set -u
     # Toolchain assert (#009): everything below is BAKED into the runner image
@@ -311,51 +557,103 @@ docker run --rm \
           --test-reporter=./lib/registry-reporter.js --test-reporter-destination=stdout \
           "__tests__/tier-eval/${stem}.test.js"
       cell=$?
-      [ "$cell" -ne 0 ] && { echo ">>> cell $stem rc=$cell (row still emitted; continuing)"; rc=1; }
+      if [ "$cell" -eq 124 ] || [ "$cell" -eq 137 ]; then
+        # Per-cell cap fired (124 = TERM, 137 = the --kill-after KILL). The
+        # killed node chain has no SIGTERM handler, so the reporter flush
+        # never ran: NO row was emitted for this cell (the end-of-sweep
+        # expected-attempts diff names it, #003) — and the oc-run-* sibling
+        # SURVIVES the kill, parked on the tier llama-server slot. Reap the
+        # containers of THIS sweep now (#004; label mac-llm-lab.sweep=$OC_SWEEP_ID
+        # — only one cell is ever in flight, so sweep scope == cell scope).
+        reaped=$(docker ps -a --filter "label=mac-llm-lab.sweep=$OC_SWEEP_ID" --format "{{.Names}}" | tr "\n" " ")
+        if [ -n "$reaped" ]; then
+          docker rm -f $(docker ps -aq --filter "label=mac-llm-lab.sweep=$OC_SWEEP_ID") >/dev/null 2>&1
+          echo ">>> cell $stem KILLED by per-cell cap (rc=$cell): NO row emitted (reporter flush never ran); reaped sweep container(s): $reaped"
+        else
+          echo ">>> cell $stem KILLED by per-cell cap (rc=$cell): NO row emitted (reporter flush never ran); no sweep-labeled container left to reap"
+        fi
+        rc=1
+      elif [ "$cell" -ne 0 ]; then
+        echo ">>> cell $stem rc=$cell (cell failed; a row was emitted iff runAgent reached the reporter flush — the end-of-sweep expected-attempts diff audits it); continuing"
+        rc=1
+      fi
     done
     exit $rc
   '
 SUB_RC=$?
 set -e
+# #007: ticker down first (the index must stop moving before the repair pass
+# reads it), then repair this arm's frozen runDirs from the host log.
+if [ -n "$TIMINGS_INDEX" ]; then
+  stop_timings_ticker
+  repair_arm_timings
+fi
 [ "$SUB_RC" -ne 0 ] && ARMS_RC=1
-log "==> arm $ARM exit rc=$SUB_RC (cell failures are tolerated; rows still emitted)"
+log "==> arm $ARM exit rc=$SUB_RC (cell failures are tolerated; row accountability is audited post-gate)"
 done
 log ""
 log "==> all arms done (arms rc=$ARMS_RC)"
+
+# ============================================================================
+# Row audit (#003) — observed-vs-planned: every planned (task, config, rep)
+# cell must have produced a registry row. Runs on the FRESH rows only (the
+# --since-line watermark taken before the arms phase), so REUSE_ROWS baseline
+# rows neither satisfy nor inflate the plan. A shortfall names the missing
+# cells and turns the sweep red (exit 2) even if every other phase passed.
+# ============================================================================
+log ""
+log "==> Row audit: expected-attempts diff (plan: $PLAN_CSV, watermark: $REG_WATERMARK lines)"
+AUDIT_RC=0
+docker run --rm \
+  -v "$REPO_DIR:$REPO_DIR" -w "$REPO_DIR/host/test" \
+  --entrypoint node "$RUNNER_IMAGE" \
+  scripts/expected-attempts.mjs diff \
+  --expected "$PLAN_CSV" --registry "$HOST_REG" --since-line "$REG_WATERMARK" \
+  || AUDIT_RC=1
 
 # ============================================================================
 # Gate — every row config_id-stamped, both sides of each pair bucketed
 # ============================================================================
 log ""
 log "==> Gate: paired_bootstrap must bucket BOTH configs of every (arm, baseline) pair"
+GATE_RC=0
 if [ ! -s "$HOST_REG" ]; then
-  err "no registry rows at $HOST_REG — no arm emitted anything (check arm output above)"
+  # Not err(): the audit above already named every missing cell; fall through
+  # to the combined exit so the arms/audit verdicts aren't masked.
+  log "ERROR: no registry rows at $HOST_REG — no arm emitted anything (check arm output above)"
+  GATE_RC=1
+else
+  # Run the gate in the runner image (it has node), against the LIVE registry +
+  # libs via the path-matched mount. One gate run per non-baseline arm, with
+  # EXPLICIT --treatment/--baseline. A single-arm sweep where ARM == BASELINE
+  # degenerates to a row-discipline smoke (delta trivially 0) — still asserts
+  # every row carries an in-enum config_id.
+  TREATMENTS=""
+  for ARM in $ARMS; do
+    [ "$ARM" = "$BASELINE" ] || TREATMENTS="$TREATMENTS $ARM"
+  done
+  [ -n "$TREATMENTS" ] || TREATMENTS="$BASELINE"
+  set +e
+  for TREATMENT in $TREATMENTS; do
+  log "[gate] treatment=$TREATMENT vs baseline=$BASELINE"
+  docker run --rm \
+    -v "$REPO_DIR:$REPO_DIR" -w "$REPO_DIR/host/test" \
+    --entrypoint node "$RUNNER_IMAGE" \
+    scripts/config-ab-pairing-check.mjs "$HOST_REG" --tier "$TIER" --treatment "$TREATMENT" --baseline "$BASELINE"
+  SUB_RC=$?
+  [ "$SUB_RC" -ne 0 ] && GATE_RC=1
+  done
+  set -e
 fi
 
-# Run the gate in the runner image (it has node), against the LIVE registry +
-# libs via the path-matched mount. One gate run per non-baseline arm, with
-# EXPLICIT --treatment/--baseline. A single-arm sweep where ARM == BASELINE
-# degenerates to a row-discipline smoke (delta trivially 0) — still asserts
-# every row carries an in-enum config_id.
-GATE_RC=0
-TREATMENTS=""
-for ARM in $ARMS; do
-  [ "$ARM" = "$BASELINE" ] || TREATMENTS="$TREATMENTS $ARM"
-done
-[ -n "$TREATMENTS" ] || TREATMENTS="$BASELINE"
-set +e
-for TREATMENT in $TREATMENTS; do
-log "[gate] treatment=$TREATMENT vs baseline=$BASELINE"
-docker run --rm \
-  -v "$REPO_DIR:$REPO_DIR" -w "$REPO_DIR/host/test" \
-  --entrypoint node "$RUNNER_IMAGE" \
-  scripts/config-ab-pairing-check.mjs "$HOST_REG" --tier "$TIER" --treatment "$TREATMENT" --baseline "$BASELINE"
-SUB_RC=$?
-[ "$SUB_RC" -ne 0 ] && GATE_RC=1
-done
-set -e
-
 log ""
-log "==> Done. registry: $HOST_REG   (arms rc=$ARMS_RC, gate rc=$GATE_RC)"
+log "==> Done. registry: $HOST_REG   (arms rc=$ARMS_RC, audit rc=$AUDIT_RC, gate rc=$GATE_RC)"
 log "    verdicts: docker run --rm -v \"$REPO_DIR:$REPO_DIR\" -w \"$REPO_DIR/host/test\" --entrypoint node $RUNNER_IMAGE scripts/config-ab-verdict.mjs \"$HOST_REG\" --tier $TIER --treatment <arm> --baseline $BASELINE"
-exit "$GATE_RC"
+# Exit-code precedence (#003): ANY nonzero phase fails the sweep; when several
+# fail, the most upstream cause wins the code — 1 arms, 2 row shortfall,
+# 3 gate. The old `exit $GATE_RC` let a REUSE_ROWS sweep whose arms all wedged
+# exit 0 on a gate that passed against pre-existing rows.
+[ "$ARMS_RC"  -eq 0 ] || exit 1
+[ "$AUDIT_RC" -eq 0 ] || exit 2
+[ "$GATE_RC"  -eq 0 ] || exit 3
+exit 0

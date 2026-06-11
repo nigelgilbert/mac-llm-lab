@@ -36,8 +36,10 @@
 //     The asymmetry is intentional: runAgent does NOT wrap its body in
 //     try/finally to fire the sentinel on throw, so SIGTERM landing between
 //     a mid-runAgent throw and end-of-stream loses these sidecars. Mid-
-//     runAgent throws are rare (spawn ENOENT-class) and expected-attempts.mjs
-//     --diff catches the resulting missing cells, so the tradeoff is
+//     runAgent throws are rare (spawn ENOENT-class) and the driver's row
+//     audit (#003: run-config-ab.sh writes the expected-attempts plan before
+//     its arms phase and diffs the fresh registry rows post-gate) names the
+//     resulting missing cells and fails the sweep, so the tradeoff is
 //     acceptable. Don't "fix" by adding try/finally without revisiting this.
 
 import { writeAssertionResult } from './registry_emit.js';
