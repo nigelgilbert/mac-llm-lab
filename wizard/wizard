@@ -146,16 +146,21 @@ cmd_doctor() {
   fi
 
   hdr "OpenCode serving (read-only)"
-  # Tier map mirrors steps/51-opencode-server.sh / scripts/opencode-server.
+  # Tier identity from THE single tier table (#016):
+  # host/llama-server/tiers.conf — the same file steps/51+52, oc,
+  # opencode-server and the sweep driver resolve; no mirrored map here.
   # launchctl print + curl GET /health only — never mutates launchd state.
-  local entry t p l uid loaded green
+  local t p l uid loaded green tiers_conf_ok=0
   uid=$(id -u)
-  for entry in \
-    "64 11436 com.mac-llm-lab.opencode-server" \
-    "16 11437 com.mac-llm-lab.opencode-server-16" \
-    "32 11438 -"; do
-    set -- $entry
-    t=$1; p=$2; l=$3
+  # shellcheck disable=SC1090,SC1091
+  if source "${REPO_ROOT}/host/llama-server/tiers.conf" 2>/dev/null; then
+    tiers_conf_ok=1
+  else
+    warn "tier table missing/unreadable: host/llama-server/tiers.conf"
+  fi
+  [ "$tiers_conf_ok" = 1 ] && for t in $TIERS_ALL; do
+    tier_resolve "$t" || { warn "tier table has no row for tier ${t}"; continue; }
+    p="$TIER_PORT"; l="$TIER_LAUNCHD_LABEL"
     loaded=no; green=no
     if [ "$l" != "-" ] && launchctl print "gui/${uid}/${l}" >/dev/null 2>&1; then
       loaded=yes
@@ -208,13 +213,20 @@ cmd_doctor() {
     warn "global prompt not installed (${agents}) — oc falls back to the repo source"
   fi
   missing_cfg=""
-  for cfg in opencode.json opencode.16.json opencode.32.json; do
-    [ -f "${REPO_ROOT}/client/opencode/${cfg}" ] || missing_cfg="${missing_cfg} ${cfg}"
-  done
-  if [ -z "$missing_cfg" ]; then
-    ok "tier configs present (client/opencode/opencode.json/.16/.32)"
+  if [ "$tiers_conf_ok" = 1 ]; then
+    # config filenames from the tier table (#016) — same source as step 52
+    for t in $TIERS_ALL; do
+      tier_resolve "$t" || continue
+      cfg="$TIER_OPENCODE_CONFIG"
+      [ -f "${REPO_ROOT}/client/opencode/${cfg}" ] || missing_cfg="${missing_cfg} ${cfg}"
+    done
+    if [ -z "$missing_cfg" ]; then
+      ok "tier configs present (client/opencode: one per tiers.conf tier)"
+    else
+      warn "tier configs missing:${missing_cfg}"
+    fi
   else
-    warn "tier configs missing:${missing_cfg}"
+    warn "tier configs unchecked (tier table unreadable)"
   fi
   printf '\n'
 }

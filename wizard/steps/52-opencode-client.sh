@@ -63,10 +63,16 @@ step_52_config_ok() {
 # step_52_render_remote HOST — derive opencode.remote{,.16,.32}.json from the
 # repo tier configs with host.docker.internal -> HOST. Derived + gitignored,
 # so content-compare-then-rewrite (not never-overwrite): a changed host must
-# not leave stale configs behind.
+# not leave stale configs behind. The source filenames come from THE tier
+# table (#016), not a private list.
 step_52_render_remote() {
-  local host="$1" src dst body changed=0
-  for src in opencode.json opencode.16.json opencode.32.json; do
+  local host="$1" src dst body changed=0 t
+  # shellcheck disable=SC1090,SC1091
+  source "${REPO_ROOT}/host/llama-server/tiers.conf" 2>/dev/null \
+    || { fail "tier table missing: host/llama-server/tiers.conf"; return 1; }
+  for t in $TIERS_ALL; do
+    tier_resolve "$t" || return 1
+    src="$TIER_OPENCODE_CONFIG"
     dst="${src/opencode./opencode.remote.}"
     body=$(cat "${REPO_ROOT}/client/opencode/${src}") || return 1
     body="${body//host.docker.internal/$host}"
@@ -112,16 +118,25 @@ step_52_main() {
   fi
 
   # --- tier configs (repo files, mounted at runtime by oc) -------------------
-  local bad=""
-  step_52_config_ok opencode.json    11436 || bad="$bad opencode.json(:11436)"
-  step_52_config_ok opencode.16.json 11437 || bad="$bad opencode.16.json(:11437)"
-  step_52_config_ok opencode.32.json 11438 || bad="$bad opencode.32.json(:11438)"
+  # Filenames + ports come from THE tier table (#016): this check IS the
+  # rendered-artifact contract — each committed opencode config must dial the
+  # port tiers.conf assigns its tier, or it fails the install here.
+  local bad="" t portlist=""
+  # shellcheck disable=SC1090,SC1091
+  source "${REPO_ROOT}/host/llama-server/tiers.conf" 2>/dev/null \
+    || { fail "tier table missing: host/llama-server/tiers.conf"; return 1; }
+  for t in $TIERS_ALL; do
+    tier_resolve "$t" || { fail "tier table has no row for tier ${t}"; return 1; }
+    step_52_config_ok "$TIER_OPENCODE_CONFIG" "$TIER_PORT" \
+      || bad="$bad ${TIER_OPENCODE_CONFIG}(:${TIER_PORT})"
+    portlist="${portlist} :${TIER_PORT}"
+  done
   if [ -n "$bad" ]; then
     fail "tier config check failed:${bad}"
-    info "each must exist, pin \"autoupdate\": false, and dial its own tier port"
+    info "each must exist, pin \"autoupdate\": false, and dial its tiers.conf port"
     return 1
   fi
-  ok "tier configs OK (autoupdate:false, ports 11436/11437/11438)"
+  ok "tier configs OK (autoupdate:false, ports${portlist})"
 
   # --- client-only: remote configs pointed at the LAN serving host -----------
   if [ "$(state_get TOPOLOGY 2>/dev/null)" = "client-only" ]; then
@@ -132,7 +147,10 @@ step_52_main() {
       ohost=$(prompt_str "OpenCode server host (LAN address of the serving Mac; IP recommended — .local often fails inside containers)" "mac-llm-lab.local")
       state_set OPENCODE_HOST "$ohost"
     fi
-    state_has OPENCODE_PORT || state_set OPENCODE_PORT 11436
+    # default serving port = the DEFAULT tier's row in the tier table (#016)
+    if ! state_has OPENCODE_PORT; then
+      tier_resolve "$TIER_DEFAULT" && state_set OPENCODE_PORT "$TIER_PORT"
+    fi
     step_52_render_remote "$ohost" || { fail "remote config render failed"; return 1; }
   fi
 }

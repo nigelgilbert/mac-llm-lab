@@ -79,7 +79,12 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
-LOG_PATH="${OPENCODE_LLAMA_LOG:-/tmp/opencode-llama-server.log}"
+# Default log = the DEFAULT tier's log path from THE tier table (#016);
+# OPENCODE_LLAMA_LOG / --log override (the sweep driver passes the tier log).
+# shellcheck source=../tiers.conf
+. "$SCRIPT_DIR/../tiers.conf"
+tier_resolve "$TIER_DEFAULT" || { echo "ERROR: tiers.conf broken (TIER_DEFAULT=$TIER_DEFAULT)" >&2; exit 1; }
+LOG_PATH="${OPENCODE_LLAMA_LOG:-$TIER_LOG_PATH}"
 CAP_BYTES="${OC_ROTATE_CAP_BYTES:-52428800}"        # 50 MB
 TAIL_BYTES="${OC_ROTATE_TAIL_BYTES:-8388608}"        # 8 MB kept in <log>.1
 INDEX_DIR="${OC_ROTATE_INDEX_DIR:-$REPO_ROOT/host/test/.claw-runtime}"

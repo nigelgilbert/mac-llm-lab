@@ -26,8 +26,9 @@ Apple Silicon Mac (lab host)
 
 | Path | What |
 |---|---|
-| [`scripts/opencode-server`](scripts/opencode-server) | Tier-parameterized lifecycle: `{start\|stop\|restart\|status\|health\|probe\|install\|uninstall}`; `OPENCODE_TIER=64\|16\|32` → `:11436/:11437/:11438`. `install` sets up the launchd-resident tier-64 daemon (`com.mac-llm-lab.opencode-server`, RunAtLoad+KeepAlive). |
-| [`models.conf`](models.conf) | Tier → GGUF/sampler/ctx mapping (single source of truth for serving params). |
+| [`scripts/opencode-server`](scripts/opencode-server) | Tier-parameterized lifecycle: `{start\|stop\|restart\|status\|health\|probe\|install\|uninstall}`; `OPENCODE_TIER=64\|16\|32` → the tier's `tiers.conf` port. `install` sets up the launchd-resident tier-64 daemon (RunAtLoad+KeepAlive). |
+| [`tiers.conf`](tiers.conf) | **THE tier-identity table (#016)**: tier → port / opencode config json / launchd label (`-` = on-demand only) / log tag / alias / template. Sourced by every bash consumer (`opencode-server`, `oc`, `run-config-ab.sh`, wizard) and line-parsed by `host/test/lib/config.js`; adding a tier or moving a port is an edit here (+ the rendered artifacts it names). Verify with [`scripts/check-tier-table.sh`](scripts/check-tier-table.sh). |
+| [`models.conf`](models.conf) | Tier → GGUF/sampler/ctx mapping (the per-tier MODEL table; tier identity lives in `tiers.conf`). |
 | [`templates/`](templates/) | Vendored corrected Jinja chat templates (system-not-first fix; see [`templates/README.md`](templates/README.md)). |
 | [`launchd/`](launchd/) | Plist templates rendered by `install`. |
 | [`docs/system-prompt.md`](docs/system-prompt.md) | The discipline prompt — installed globally at `~/.config/opencode/AGENTS.md` by wizard step 53. |

@@ -53,15 +53,16 @@
 #       (#001), so the wrapper owns this assertion and fails loud
 #   3   tier server could not be made green
 #
-# Tier serving model (decision §2.5):
-#   64  RESIDENT — launchd daemon `com.mac-llm-lab.opencode-server` (:11436).
-#       If red and the launchd job is loaded, we WAIT for green (model load
-#       takes ~minutes; never bootout a loading/healthy service). If red and
-#       not loaded, `opencode-server install` bootstraps it.
-#   16  ON-DEMAND (:11437) — direct-boot `opencode-server start`; STOPPED on
-#       exit iff oc started it (OC_KEEP_SERVER=1 to keep). A tier-16 server
-#       that was already green is left untouched.
-#   32  ON-DEMAND (:11438) — same as 16 (no launchd plist by design).
+# Tier serving model (decision §2.5; ports/labels/configs all come from the
+# single tier table host/llama-server/tiers.conf, #016):
+#   64  RESIDENT — launchd daemon (table label/port). If red and the launchd
+#       job is loaded, we WAIT for green (model load takes ~minutes; never
+#       bootout a loading/healthy service). If red and not loaded,
+#       `opencode-server install` bootstraps it.
+#   16  ON-DEMAND — direct-boot `opencode-server start`; STOPPED on exit iff
+#       oc started it (OC_KEEP_SERVER=1 to keep). A tier-16 server that was
+#       already green is left untouched.
+#   32  ON-DEMAND — same as 16 (no launchd plist by design; table label "-").
 #
 # Container-first is architectural (decision §2.4): oc never runs the
 # opencode binary on the host; everything goes through `docker compose run`
@@ -84,6 +85,16 @@ REPO_ROOT="$(cd "$COMPOSE_DIR/../.." && pwd)"            # mac-llm-lab-1
 SERVER_SCRIPT="$REPO_ROOT/host/llama-server/scripts/opencode-server"
 INVOKE_PWD="$PWD"                                        # the workspace to mount
 
+# Single tier-identity table (#016): port / config json / launchd label / log
+# path are resolved from host/llama-server/tiers.conf — the same file the
+# launcher, sweep driver and wizard resolve. No private case map in oc.
+TIERS_CONF="$REPO_ROOT/host/llama-server/tiers.conf"
+if [[ ! -f "$TIERS_CONF" ]]; then
+  echo "oc: ERROR: tier table missing: $TIERS_CONF" >&2; exit 1
+fi
+# shellcheck source=../../../host/llama-server/tiers.conf
+source "$TIERS_CONF"
+
 REPO_PROMPT_SOURCE="$REPO_ROOT/host/llama-server/docs/system-prompt.md"
 WIZARD_PROMPT="$HOME/.config/opencode/AGENTS.md"
 CONTAINER_PROMPT_PATH="/root/.config/opencode/AGENTS.md" # the #001 winner
@@ -95,7 +106,7 @@ die3() { echo "oc: SERVER ERROR: $*" >&2; exit 3; }
 usage() { sed -n '/^# Usage:/,/^# ===/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'; }
 
 # --- arg parsing ------------------------------------------------------------
-TIER="${OPENCODE_TIER:-64}"
+TIER="${OPENCODE_TIER:-$TIER_DEFAULT}"
 PUBLISH_PORTS=0
 SUBCMD=""
 while [[ $# -gt 0 ]]; do
@@ -109,12 +120,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-case "$TIER" in
-  64) PORT=11436; TIER_CONFIG="$COMPOSE_DIR/opencode.json" ;;
-  16) PORT=11437; TIER_CONFIG="$COMPOSE_DIR/opencode.16.json" ;;
-  32) PORT=11438; TIER_CONFIG="$COMPOSE_DIR/opencode.32.json" ;;
-  *)  die "unsupported tier: $TIER (use 16, 32 or 64)" ;;
-esac
+# #016: resolve the tier row from the table (sets TIER_PORT /
+# TIER_OPENCODE_CONFIG / TIER_LAUNCHD_LABEL / TIER_LOG_PATH / ...).
+tier_resolve "$TIER" || die "unsupported tier: $TIER (known tiers: $TIERS_ALL — see host/llama-server/tiers.conf)"
+PORT="$TIER_PORT"
+TIER_CONFIG="$COMPOSE_DIR/$TIER_OPENCODE_CONFIG"
 
 # --- prompt-injection preconditions (FAIL LOUD — injection is silent) -------
 resolve_prompt() {
@@ -166,7 +176,12 @@ assert_config() {
 SERVER_HOST="${OC_SERVER_HOST:-127.0.0.1}"
 green() { [[ "$(curl -s -o /dev/null -w '%{http_code}' "http://$SERVER_HOST:$PORT/health" 2>/dev/null)" == "200" ]]; }
 
-launchd_loaded_64() { launchctl print "gui/$(id -u)/com.mac-llm-lab.opencode-server" >/dev/null 2>&1; }
+# Resident-daemon launchd check — label from the tier table (#016); "-" means
+# the tier has no launchd path by design, so it can never read as loaded.
+launchd_loaded_64() {
+  [[ "$TIER_LAUNCHD_LABEL" != "-" ]] || return 1
+  launchctl print "gui/$(id -u)/$TIER_LAUNCHD_LABEL" >/dev/null 2>&1
+}
 
 wait_green() { # $1 = seconds
   local t="$1"
@@ -197,7 +212,7 @@ assert_server() {
       # live service here — just wait for green.
       echo "oc: resident tier-64 daemon is loaded but not green yet — waiting (model load)" >&2
       wait_green 240 || die3 "resident tier-64 daemon did not reach green /health on :$PORT within 240s
-  Inspect: $SERVER_SCRIPT status   and /tmp/opencode-llama-server.log"
+  Inspect: $SERVER_SCRIPT status   and $TIER_LOG_PATH"
     else
       echo "oc: resident tier-64 daemon not installed — bootstrapping launchd service" >&2
       OPENCODE_TIER=64 "$SERVER_SCRIPT" install >&2 || die3 "opencode-server install failed for tier-64"

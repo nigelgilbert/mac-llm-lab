@@ -22,6 +22,16 @@
 
 step_61_oc() { printf '%s' "${HOME}/.local/bin/oc"; }
 
+# Default serving port when the wizard state never recorded OPENCODE_PORT
+# (e.g. a client-only install resumed on a fresh state): the DEFAULT tier's
+# port from THE tier table (#016) — never a hardcoded literal. Subshell so
+# the table vars don't leak into the step.
+step_61_default_port() {
+  # shellcheck disable=SC1090,SC1091
+  ( source "${REPO_ROOT}/host/llama-server/tiers.conf" 2>/dev/null \
+      && tier_resolve "$TIER_DEFAULT" && printf '%s' "$TIER_PORT" )
+}
+
 step_61_main() {
   hdr "OpenCode smoke (injection probe + oc run)"
   local oc topo tier ohost="" oport
@@ -36,7 +46,7 @@ step_61_main() {
 
   if [ "$topo" = "client-only" ]; then
     ohost=$(state_get OPENCODE_HOST 2>/dev/null || printf 'mac-llm-lab.local')
-    oport=$(state_get OPENCODE_PORT 2>/dev/null || printf '11436')
+    oport=$(state_get OPENCODE_PORT 2>/dev/null || step_61_default_port)
     if ! curl -fsS --max-time 4 "http://${ohost}:${oport}/health" >/dev/null 2>&1; then
       warn "SKIPPED: LAN opencode server not reachable at http://${ohost}:${oport}/health"
       info "client install is complete; bring the serving Mac's tier daemon up"
@@ -65,7 +75,8 @@ step_61_main() {
   token="WIZARD-OC-SMOKE-$$"
   if [ "$topo" = "client-only" ]; then
     # Remote config dials the LAN host from inside the container; tier 64 is
-    # the resident-daemon port family the remote render targets (:11436).
+    # the resident-daemon port family the remote render targets (tiers.conf
+    # default-tier port).
     act "oc run against ${ohost}:${oport} — create smoke.txt in ${ws}"
     ( cd "$ws" && OC_SERVER_HOST="$ohost" OPENCODE_TIER=64 \
         OPENCODE_CONFIG_JSON="${REPO_ROOT}/client/opencode/opencode.remote.json" \

@@ -193,8 +193,18 @@ verdicts counted overflows as eligible failures ("0 oc `harness_error`").
    host per-tier log read-only at `/var/log/opencode-llama-server.log` inside the
    eval-runner and sets `OPENCODE_LLAMA_LOG` to that path (host `/tmp` is never
    mounted in the canonical topology).
-2. Otherwise the conventional host path per tier: `64` (default) →
-   `/tmp/opencode-llama-server.log`, `32` → `…-32.log`, `16` → `…-16.log`.
+2. Otherwise the per-tier host path from **THE tier table** (#016):
+   `lib/config.js tierTable()` parses `host/llama-server/tiers.conf`
+   (`${OPENCODE_LOG_BASE}${LOG_TAG}.log`; currently `64` (default) →
+   `/tmp/opencode-llama-server.log`, `32` → `…-32.log`, `16` → `…-16.log`)
+   when the conf is readable — host node and path-matched runner mounts —
+   else the embedded `FALLBACK_TIER_TABLE` snapshot. The snapshot cannot
+   silently drift: the tier-table contract test
+   (`__tests__/lib/tier-table.contract.test.js`) fails on any divergence
+   wherever the conf is visible, and
+   `host/llama-server/scripts/check-tier-table.sh` cross-checks every
+   consumer (bash + JS) on the host. An unknown/absent tier resolves to the
+   table's default-tier row (historical behavior preserved).
 
 ### Fail-loud on an unreadable log (#007)
 
@@ -349,9 +359,16 @@ three. Therefore:
   (covers between-cells gaps and a just-finished sweep's repair pass), or the
   resident lock `/tmp/oc-resident.lock.d` cannot be acquired
   (`OC_ROTATE_HOLDING_LOCK=1` when the invoker already holds it).
-- **Invocation expectation:** manual, between sweeps (`--dry-run` to check);
-  a driver-preflight rotation — rotate *before* any cursor opens — is the
-  recommended automation point (handed to #016, which owns the driver).
+- **Invocation seats:** (a) manual, between sweeps (`--dry-run` to check);
+  (b) **the driver preflight (#016, SHIPPED)** — `run-config-ab.sh` invokes
+  the rotate script at sweep start, strictly before it starts any
+  sweep-labeled container, creates its ticker index, or opens any cursor
+  (i.e. before this sweep can trip G1/G2 itself). Guard refusal (exit 2 —
+  e.g. another sweep's containers, a <30-min-old index, or the resident
+  lock held without `OC_ROTATE_HOLDING_LOCK=1`) is tolerated as a skip;
+  any other rotation error is fatal to the sweep. Operators who run sweeps
+  while holding `/tmp/oc-resident.lock.d` export `OC_ROTATE_HOLDING_LOCK=1`
+  to let the preflight's G3 pass.
 - Within-run consistency is unaffected: the cursor only needs the file stable
   **within** a run, and any cursor opened after a rotation sees consistent
   (smaller) offsets. `readLogSlice` already tolerates a start-past-EOF as an

@@ -326,6 +326,10 @@ else
   t_not_ok "step_51_is_done loaded+healthy"
 fi
 
+# NOTE (#016): the port/label/config literals in the assertions below are
+# INTENTIONAL PINS of host/llama-server/tiers.conf (the single tier table the
+# steps now resolve) — they are test expectations, not a resolution map, and
+# exist precisely to catch an accidental tiers.conf edit.
 step_51_resolve 16
 [ "$OC_PORT" = "11437" ] && [ "$OC_LABEL" = "com.mac-llm-lab.opencode-server-16" ] \
   && t_ok "step_51_resolve: tier-16 -> :11437 / -16 label" \

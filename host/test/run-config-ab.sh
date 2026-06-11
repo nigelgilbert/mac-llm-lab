@@ -99,6 +99,14 @@
 #   REUSE_ROWS         1 = append to existing REGISTRY_OUT       (default: 0)
 #   REGISTRY_OUT       explicit shared-registry path             (default: auto-timestamped)
 #   RUNNER_IMAGE       baked eval-runner image (#009)            (default: mac-llm-lab-eval-runner:local)
+#   OC_ROTATE_HOLDING_LOCK  1 = the invoker already holds /tmp/oc-resident.lock.d
+#              (canonical sweep protocol) — lets the #015 rotation preflight's
+#              G3 lock guard pass; without it a held lock makes the preflight
+#              refuse (rc=2), which the driver tolerates as a skip. Other
+#              OC_ROTATE_* knobs (cap/tail/index window) pass through too.
+#   PRINT_TIER_RESOLUTION  1 = print the resolved tier identity (port/config/
+#              log tag from host/llama-server/tiers.conf, #016) and exit 0
+#              before any preflight — used by scripts/check-tier-table.sh.
 #   OPENCODE_SERVER_TIMINGS  1 = #007 server-timings plumbing: forward the flag
 #              into the eval-runner, bind-mount the tier's llama-server log
 #              READ-ONLY at /var/log/opencode-llama-server.log and point
@@ -140,10 +148,20 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
+# ---- #016 single tier table -------------------------------------------------
+# Tier identity (port / opencode config json / log tag) is resolved from THE
+# tier table host/llama-server/tiers.conf — the same file opencode-server, oc
+# and the wizard resolve, so the driver can never disagree with the launcher
+# it health-checks or the config it mounts. No private case map here.
+TIERS_CONF="$REPO_DIR/host/llama-server/tiers.conf"
+[ -f "$TIERS_CONF" ] || { printf 'ERROR: tier table missing: %s\n' "$TIERS_CONF" >&2; exit 1; }
+# shellcheck source=../llama-server/tiers.conf
+. "$TIERS_CONF"
+
 # ---- config / knobs --------------------------------------------------------
 SMOKE_TESTS="${SMOKE_TESTS:-deep-equal}"
 REPEATS="${CONFIG_AB_REPEATS:-1}"
-TIER="${TIER:-64}"
+TIER="${TIER:-$TIER_DEFAULT}"
 PER_TEST_TIMEOUT="${PER_TEST_TIMEOUT:-600}"
 ARMS="${ARMS:-opencode-a}"
 BASELINE="${BASELINE:-${ARMS%% *}}"
@@ -159,22 +177,31 @@ log()  { printf '%s\n' "$*" >&2; }
 err()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 http() { curl -s -o /dev/null -w '%{http_code}' "$1" 2>/dev/null || echo 000; }
 
-# Tier → OpenCode server port + client config (#019 wiring, #002 tier-32 port).
-# The OpenCode container's serving endpoint lives in its mounted
-# opencode(.NN).json, NOT in OC_PORT — OC_PORT only health-checks the server.
-# Each arm MUST get the matching config or OpenCode dials the wrong port and
-# every cell ConnectionRefused-loops to timeout (iters=1, 0 tokens). Consumed
-# by client/opencode/docker-compose.yml's ${OPENCODE_CONFIG_JSON} mount.
-# OC_LOG_TAG mirrors opencode-server's per-tier TAG ("" | -16 | -32): it names
-# the host llama-server log /tmp/opencode-llama-server${TAG}.log for the #007
-# server-timings mount below — same derivation, never guessed.
-case "$TIER" in
-  64) OC_PORT=11436; OC_CONFIG_JSON=./opencode.json;    OC_LOG_TAG="" ;;
-  16) OC_PORT=11437; OC_CONFIG_JSON=./opencode.16.json; OC_LOG_TAG="-16" ;;
-  32) OC_PORT=11438; OC_CONFIG_JSON=./opencode.32.json; OC_LOG_TAG="-32" ;;
-  *)  err "TIER=$TIER is not a known tier (64 | 16 | 32)" ;;
-esac
+# Tier → OpenCode server port + client config (#019 wiring, #002 tier-32 port;
+# #016: resolved from tiers.conf via tier_resolve — never a private map). The
+# OpenCode container's serving endpoint lives in its mounted opencode(.NN).json,
+# NOT in OC_PORT — OC_PORT only health-checks the server. Each arm MUST get the
+# matching config or OpenCode dials the wrong port and every cell
+# ConnectionRefused-loops to timeout (iters=1, 0 tokens). Consumed by
+# client/opencode/docker-compose.yml's ${OPENCODE_CONFIG_JSON} mount.
+# OC_LOG_TAG is opencode-server's per-tier TAG ("" | -16 | -32) FROM THE SAME
+# TABLE: it names the host llama-server log ${OPENCODE_LOG_BASE}${TAG}.log for
+# the #007 server-timings mount below — same source, never guessed.
+tier_resolve "$TIER" || err "TIER=$TIER is not a known tier (known: $TIERS_ALL — see $TIERS_CONF)"
+OC_PORT="$TIER_PORT"
+OC_CONFIG_JSON="./$TIER_OPENCODE_CONFIG"
+OC_LOG_TAG="$TIER_LOG_TAG"
 OC_HEALTH="http://127.0.0.1:$OC_PORT/health"
+
+# #016 check-tier-table.sh hook: print this driver's resolved tier identity
+# and exit BEFORE any preflight / docker / server / registry interaction, so
+# the cross-consumer assertion script can compare the driver's live resolution
+# without running a sweep.
+if [ "${PRINT_TIER_RESOLUTION:-0}" = 1 ]; then
+  printf 'TIER=%s OC_PORT=%s OC_CONFIG_JSON=%s OC_LOG_TAG=%s\n' \
+    "$TIER" "$OC_PORT" "$OC_CONFIG_JSON" "$OC_LOG_TAG"
+  exit 0
+fi
 
 # Shared registry every arm appends to (path-matched → same host file in every
 # sibling). Lives under the gitignored runtime root by convention.
@@ -344,6 +371,32 @@ log "    arms=[$ARMS]  baseline=$BASELINE  reuse_rows=$REUSE_ROWS"
 log "    shared registry → $HOST_REG"
 log "    harness_version (GIT_SHA) = $GIT_SHA"
 
+# ---- #015/#016 rotation preflight: BEFORE any cursor, ticker or container ---
+# Cap-check (and, if over-cap, copytruncate-rotate) the tier's llama-server log
+# via the guarded rotate-opencode-server-log.sh. This is the ONLY safe seat
+# (#015 decision: no timer — TOCTOU): it runs before this sweep starts any
+# sweep-labeled container (guard G1), creates its ticker index (guard G2), or
+# opens any byte cursor, so rotation can never corrupt offsets this sweep
+# records. Guard semantics respected:
+#   exit 0 — rotated or below cap (no-op): proceed;
+#   exit 2 — guard REFUSAL (another sweep's containers, a fresh index from a
+#            <30-min-old sweep, or the resident lock held without
+#            OC_ROTATE_HOLDING_LOCK=1): tolerated as SKIP — rotation is
+#            between-sweeps hygiene, never worth failing a sweep over;
+#   else   — real rotation error: FATAL (a half-rotated log would corrupt
+#            every offset this sweep is about to record).
+# Invokers that already hold /tmp/oc-resident.lock.d (the canonical sweep
+# protocol) export OC_ROTATE_HOLDING_LOCK=1 to let G3 pass; it is inherited
+# from this environment by the rotate script.
+ROTATE_SH="$REPO_DIR/host/llama-server/scripts/rotate-opencode-server-log.sh"
+ROTATE_RC=0
+"$ROTATE_SH" --log "${OPENCODE_LLAMA_LOG:-${OPENCODE_LOG_BASE}${OC_LOG_TAG}.log}" || ROTATE_RC=$?
+case "$ROTATE_RC" in
+  0) : ;;
+  2) log "    rotation preflight: REFUSED by rotate guards (rc=2) — skipping (hygiene only; sweep proceeds)" ;;
+  *) err "rotation preflight failed (rc=$ROTATE_RC) — refusing to sweep over a possibly half-rotated log" ;;
+esac
+
 # ---- server: up iff needed (stop iff started — see cleanup) -----------------
 if [ "$(http "$OC_HEALTH")" = 200 ]; then
   log "==> oc-$TIER already green on :$OC_PORT — using as found (will not stop it)"
@@ -363,15 +416,16 @@ fi
 # ---- #007: server-timings plumbing (opt-in; flag off = exactly no-op) -------
 # When OPENCODE_SERVER_TIMINGS=1 on the host, the eval-runner needs to read the
 # tier's llama-server log (lib/opencode_server_timings.js log-cursor capture).
-# Host log path is derived EXACTLY as host/llama-server/scripts/opencode-server
-# does: the OPENCODE_LLAMA_LOG override wins, else /tmp/opencode-llama-server
-# + the tier TAG ("" | -16 | -32). Mounted READ-ONLY at a fixed container path
-# and pointed at via OPENCODE_LLAMA_LOG in the runner env. Checked after
-# server-up so an on-demand tier's freshly created log is visible.
+# Host log path is derived from THE SAME tier table opencode-server reads
+# (#016): the OPENCODE_LLAMA_LOG override wins, else ${OPENCODE_LOG_BASE} +
+# the tier LOG_TAG ("" | -16 | -32) from tiers.conf. Mounted READ-ONLY at a
+# fixed container path and pointed at via OPENCODE_LLAMA_LOG in the runner
+# env. Checked after server-up so an on-demand tier's freshly created log is
+# visible.
 TIMINGS_ARGS=()
 if [ "${OPENCODE_SERVER_TIMINGS:-}" = 1 ]; then
-  HOST_LLAMA_LOG="${OPENCODE_LLAMA_LOG:-/tmp/opencode-llama-server${OC_LOG_TAG}.log}"
-  [ -f "$HOST_LLAMA_LOG" ] || err "OPENCODE_SERVER_TIMINGS=1 but the tier-$TIER llama-server log is missing: $HOST_LLAMA_LOG (derived as opencode-server does: OPENCODE_LLAMA_LOG override, else /tmp/opencode-llama-server${OC_LOG_TAG}.log). A bind mount of a missing file would silently become a directory — refusing."
+  HOST_LLAMA_LOG="${OPENCODE_LLAMA_LOG:-${OPENCODE_LOG_BASE}${OC_LOG_TAG}.log}"
+  [ -f "$HOST_LLAMA_LOG" ] || err "OPENCODE_SERVER_TIMINGS=1 but the tier-$TIER llama-server log is missing: $HOST_LLAMA_LOG (derived from tiers.conf as opencode-server does: OPENCODE_LLAMA_LOG override, else ${OPENCODE_LOG_BASE}${OC_LOG_TAG}.log). A bind mount of a missing file would silently become a directory — refusing."
   TIMINGS_ARGS=(
     -e OPENCODE_SERVER_TIMINGS=1
     -v "$HOST_LLAMA_LOG:/var/log/opencode-llama-server.log:ro"

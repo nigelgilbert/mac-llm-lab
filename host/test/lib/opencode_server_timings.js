@@ -46,6 +46,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { tierTable } from './config.js';
 
 export const SCHEMA_VERSION = 1;
 
@@ -73,8 +74,14 @@ export function serverTimingsEnabled(env = process.env) {
  * VERBATIM — this is the #007 contract with run-config-ab.sh, which bind-mounts
  * the host per-tier log read-only into the eval-runner (at
  * /var/log/opencode-llama-server.log) and points OPENCODE_LLAMA_LOG at it.
- * Otherwise the conventional per-tier host path: tier 16 → `-16.log`,
- * tier 32 → `-32.log`, tier 64 (default) → the unsuffixed resident log.
+ * Otherwise the per-tier host path comes from THE tier table (#016):
+ * lib/config.js tierTable() — host/llama-server/tiers.conf when readable
+ * (host node, path-matched runner mounts; i.e. every live seat without the
+ * env override), else the embedded FALLBACK_TIER_TABLE snapshot, which the
+ * tier-table contract test pins against the conf. No free-floating per-tier
+ * literals here (the pre-#007 tier-32 bug class). An unknown/absent tier
+ * resolves to the table's DEFAULT tier row (the resident log), preserving the
+ * historical `String(tier ?? 64)` behavior.
  *
  * @param {number|string} tier  64 (default), 32 or 16.
  * @param {NodeJS.ProcessEnv} [env]
@@ -83,10 +90,10 @@ export function serverTimingsEnabled(env = process.env) {
 export function defaultServerLogPath(tier, env = process.env) {
   const override = env ? env.OPENCODE_LLAMA_LOG : null;
   if (typeof override === 'string' && override.length > 0) return override;
-  const t = String(tier ?? 64);
-  if (t === '16') return '/tmp/opencode-llama-server-16.log';
-  if (t === '32') return '/tmp/opencode-llama-server-32.log';
-  return '/tmp/opencode-llama-server.log';
+  const table = tierTable();
+  const entry =
+    table.tiers[String(tier ?? table.default)] ?? table.tiers[String(table.default)];
+  return entry.log_path;
 }
 
 function fileSizeOrZero(p) {

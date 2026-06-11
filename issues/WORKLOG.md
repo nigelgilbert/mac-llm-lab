@@ -314,4 +314,92 @@ Committed as T4.
 
 Launched: #016 (single tier table — the last open issue).
 
-(awaiting agent report)
+### T5 result — ✅ complete
+
+- **`host/llama-server/tiers.conf`** is THE tier identity table
+  (TIERS_ALL, TIER_DEFAULT, per-tier PORT / OPENCODE_CONFIG /
+  LAUNCHD_LABEL / LOG_TAG / ALIAS / TEMPLATE, `tier_resolve()`), a
+  sibling of models.conf (which stays the MODEL table — the JS
+  line-parses tiers.conf, so it carries a strict KEY=VALUE format
+  contract). All bash consumers (opencode-server, oc, run-config-ab.sh,
+  wizard 51/52/61/doctor, validate-tool-calls, rotate script) source
+  it; private case tables deleted. JS: config.js
+  parseTiersConf/loadTierTable (+ contract-tested
+  FALLBACK_TIER_TABLE for the hermetic unit image);
+  defaultServerLogPath now table-derived. Cross-consumer assertion
+  `check-tier-table.sh`: 29 ok / 0 fail across 64/16/32; doctored-conf
+  drift fails the contract test by name.
+- Carry-forwards closed: driver-preflight rotation (before any
+  cursor/ticker/container; rc=2 refusal = skip), wizard double-battery
+  deduped (exactly one battery-verified probe per install path), stale
+  step-51 comment fixed.
+- Live: wizard doctor + `wizard selftest` 75/75; 2-task smoke sweep
+  green; timings-on sweep green with the full ladder exercised
+  (1 sliced, 1 frozen, 1 repaired → join ok, token-keyed, 5/5).
+
+### T5 boundary verification (orchestrator)
+
+Suite: **299 tests / 298 pass / 1 skip / 0 fail**. Resident :11436
+green (pid 31147 unchanged across the whole campaign), tiers 16/32
+quiet, no stray containers/locks. Committed as T5.
+
+---
+
+# Campaign wrap — all 17 issues complete (2026-06-11)
+
+| Tranche | Commit | Issues |
+|---|---|---|
+| T1 | a489f7e | #001 #005 #009 #012 #013 #017 |
+| T2 | a909a30 | #003 #004 #006 #007 #008 #011 #014 (+ virtiofs capture ladder) |
+| T3 | 7d3dc9e | #002 #015 |
+| T4 | 27bda27 | #010 |
+| T5 | (this commit) | #016 |
+
+Suite trajectory: 143/142/1/0 → 299/298/1/0 (+156 tests, 0 fails at
+every boundary). Every tranche boundary ran the full suite + at least
+one live smoke; every agent recorded per-AC evidence in its issue's
+Result section.
+
+## Brief for the final verification pass (post-/compact)
+
+**What to verify end-to-end (in rough priority order):**
+1. Full suite in the pinned container (must be ≥ 299/298/1/0).
+2. A clean full-local `wizard install` (deliberately NOT re-run after
+   T5's call-site dedupe — T5 verified doctor + selftest + step-level
+   paths only; the install path now runs: guarded step 51 →
+   opencode-server install → canonical probe incl. 6-call tool battery
+   → honest step-61 smoke with sentinel oracle). Under the resident
+   lock; it reinstalls the resident daemon and must end green.
+3. One multi-arm sweep at tier 16 or 32 (e.g. TIER=16
+   ARMS="opencode-a+git opencode-a+prompt" BASELINE=opencode-a+git)
+   — exercises on-demand server lifecycle (#005), arm×tier preflight
+   (#006), per-cell reap labels (#004), row audit (#003), telemetry
+   columns (#010) and the tier table (#016) in one shot.
+4. OPENCODE_SERVER_TIMINGS=1 sweep: confirm join_status ok (in-place or
+   repaired), slice retained, prune fired (no opencode-data/ in the
+   fresh runDir).
+5. `check-tier-table.sh` (29 assertions) + a verdict render on a
+   canonical registry (byte-stability was pinned in #012).
+
+**Known residuals / accepted risks (cross-agent roll-up):**
+- OrbStack: (a) the virtiofs freeze (memory + capture ladder; T2
+  section above); (b) the ENOENT /workspace cell flake (~30-50% of
+  sweeps under load, now LOUD via the row audit) — candidate follow-up
+  issue: driver mount-canary + one cell retry.
+- #018 is the designated next step: threshold review after the first
+  N=8 post-sprint sweep generates real parse-error telemetry (rows now
+  carry tool_call_count / error_tool_call_count /
+  truncated_tool_call_count; the T4 boundary smoke already showed
+  error_tool_call_count=1 on a passing run).
+- tiers.conf ↔ config.js FALLBACK_TIER_TABLE must be edited together
+  (contract test catches drift everywhere the conf is visible; the
+  hermetic unit image alone cannot).
+- #005: shared per-tier pidfile adoption semantics (a driver can adopt
+  + later stop a foreign mid-load server it waited green) — inherent
+  to the pidfile contract, documented in the issue, out of scope.
+- #013: validator's per-run display filter could in-theory pipefail on
+  a machine-token-only verdict block (unreachable today).
+- Rotation under an operator-held resident lock requires
+  OC_ROTATE_HOLDING_LOCK=1 (deliberate #015 posture).
+- Flag-off sweeps keep pre-#002 overflow semantics (overflow counts as
+  model failure) — documented in the AB plan + tier-16 verdict notes.

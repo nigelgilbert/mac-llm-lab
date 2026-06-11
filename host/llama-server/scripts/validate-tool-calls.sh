@@ -41,7 +41,16 @@
 # ============================================================================
 set -euo pipefail
 
-BASE="${BASE:-http://127.0.0.1:11436}"
+# Default BASE = the DEFAULT tier's port from THE tier table (#016) — the same
+# tiers.conf every other consumer resolves. Explicit BASE always wins (the
+# opencode-server probe passes it per tier; tier-16 reuse passes :PORT_16).
+_VTC_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -z "${BASE:-}" ]]; then
+  # shellcheck source=../tiers.conf
+  source "$_VTC_SCRIPT_DIR/../tiers.conf"
+  tier_resolve "$TIER_DEFAULT"
+  BASE="http://127.0.0.1:$TIER_PORT"
+fi
 REPEATS="${REPEATS:-2}"
 SAVE_DIR="${SAVE_DIR:-}"
 MODEL="${MODEL:-opencode}"

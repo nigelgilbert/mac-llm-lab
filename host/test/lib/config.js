@@ -36,6 +36,11 @@
 //
 // This module imports nothing from runAgent.js / opencode.js / registry_emit.js
 // so it can be a shared leaf dependency of all of them without an import cycle.
+// (node built-ins only — fs/path/url for the #016 tier-table parser below.)
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /** The accepted CONFIG / config_id values (the registry's coarse bundle enum).
  *  'claw-rig' is historical-only (readable rows, no runner). */
@@ -129,4 +134,154 @@ export function modelConfigIdFor({ configId, tier } = {}) {
     );
   }
   return id;
+}
+
+// ---------------------------------------------------------------------------
+// #016 single tier table — host/llama-server/tiers.conf, parsed JS-side.
+// ---------------------------------------------------------------------------
+// The tier IDENTITY map (tier → port / opencode config json / launchd label /
+// log tag) lives in ONE file: host/llama-server/tiers.conf. Every bash
+// consumer (opencode-server, oc, run-config-ab.sh, wizard) sources it; the JS
+// side parses the same file here so lib/opencode_server_timings.js
+// defaultServerLogPath() derives from the same source instead of private
+// per-tier literals (the tier-32 log-path bug class).
+//
+// HERMETICITY: the baked test image mounts only host/test/{lib,scripts,
+// __tests__}, so the conf is NOT visible to the unit suite. Design (#016,
+// recorded in the issue Result): `loadTierTable()` parses the conf when
+// readable (host node, the path-matched eval-runner mount — i.e. every LIVE
+// seat) and returns null otherwise; `tierTable()` then falls back to
+// FALLBACK_TIER_TABLE, an embedded snapshot of the conf's identity rows. The
+// "cannot disagree" property is enforced by (a) the tier-table contract test
+// (__tests__/lib/tier-table.contract.test.js), which asserts parsed-conf ===
+// FALLBACK_TIER_TABLE whenever the conf is readable, and (b)
+// host/llama-server/scripts/check-tier-table.sh, which runs that comparison
+// (plus every bash consumer) against the real conf on the host. Note the live
+// sweep path doesn't even reach the fallback: the driver passes
+// OPENCODE_LLAMA_LOG explicitly whenever OPENCODE_SERVER_TIMINGS=1.
+
+/** Default on-disk location of the tier table, resolved relative to this
+ *  module (host/test/lib → host/llama-server). Holds on the host and in any
+ *  path-matched repo mount; intentionally absent in the baked test image. */
+export const TIERS_CONF_DEFAULT_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../llama-server/tiers.conf',
+);
+
+/**
+ * Embedded snapshot of tiers.conf's identity rows — the LAST-RESORT fallback
+ * for contexts where the conf file is not visible (the hermetic unit-test
+ * image). MUST be updated in the same change as tiers.conf: the tier-table
+ * contract test fails on any divergence wherever the conf is readable, and
+ * scripts/check-tier-table.sh fails it on the host.
+ */
+export const FALLBACK_TIER_TABLE = Object.freeze({
+  default: '64',
+  log_base: '/tmp/opencode-llama-server',
+  tiers: Object.freeze({
+    '64': Object.freeze({
+      port: 11436,
+      opencode_config: 'opencode.json',
+      launchd_label: 'com.mac-llm-lab.opencode-server',
+      log_tag: '',
+      alias: 'opencode',
+      template: 'qwen36-corrected.jinja',
+      log_path: '/tmp/opencode-llama-server.log',
+    }),
+    '16': Object.freeze({
+      port: 11437,
+      opencode_config: 'opencode.16.json',
+      launchd_label: 'com.mac-llm-lab.opencode-server-16',
+      log_tag: '-16',
+      alias: 'opencode-16',
+      template: 'qwen35-corrected.jinja',
+      log_path: '/tmp/opencode-llama-server-16.log',
+    }),
+    '32': Object.freeze({
+      port: 11438,
+      opencode_config: 'opencode.32.json',
+      launchd_label: '-', // "-" = no launchd path by design (on-demand only)
+      log_tag: '-32',
+      alias: 'opencode-32',
+      template: 'qwen35-corrected.jinja',
+      log_path: '/tmp/opencode-llama-server-32.log',
+    }),
+  }),
+});
+
+/**
+ * Parse tiers.conf text into the tier table. Honors the conf's FORMAT
+ * CONTRACT: only column-1 `KEY=VALUE` lines parse (one optional matching pair
+ * of double quotes stripped; values are literals); comments, blank lines and
+ * the indented tier_resolve() body are ignored. Throws on a structurally
+ * broken table (no TIERS_ALL, or a listed tier missing its PORT) — fail loud,
+ * never half-resolve.
+ *
+ * @param {string} text
+ * @returns {{ default: string|null, log_base: string|null,
+ *             tiers: Record<string, object> }}
+ */
+export function parseTiersConf(text) {
+  const vars = {};
+  for (const raw of String(text).split('\n')) {
+    const m = raw.match(/^([A-Z][A-Z0-9_]*)=(?:"([^"]*)"|([^\s#]*))\s*$/);
+    if (m) vars[m[1]] = m[2] !== undefined ? m[2] : m[3];
+  }
+  const tiersAll = (vars.TIERS_ALL ?? '').trim().split(/\s+/).filter(Boolean);
+  if (tiersAll.length === 0) {
+    throw new Error('tiers.conf: TIERS_ALL missing/empty — not a tier table');
+  }
+  const logBase = vars.OPENCODE_LOG_BASE ?? null;
+  const tiers = {};
+  for (const t of tiersAll) {
+    const field = (name) => vars[`TIER_${t}_${name}`];
+    if (field('PORT') === undefined) {
+      throw new Error(`tiers.conf: tier ${t} is in TIERS_ALL but TIER_${t}_PORT is missing`);
+    }
+    const logTag = field('LOG_TAG') ?? '';
+    tiers[t] = {
+      port: Number(field('PORT')),
+      opencode_config: field('OPENCODE_CONFIG') ?? null,
+      launchd_label: field('LAUNCHD_LABEL') ?? null, // "-" kept verbatim
+      log_tag: logTag,
+      alias: field('ALIAS') ?? null,
+      template: field('TEMPLATE') ?? null,
+      log_path: logBase != null ? `${logBase}${logTag}.log` : null,
+    };
+  }
+  return { default: vars.TIER_DEFAULT ?? null, log_base: logBase, tiers };
+}
+
+/**
+ * Load + parse the tier table from disk. Injectable for tests/tools:
+ * `text` wins outright; else `path`, else the OPENCODE_TIERS_CONF env
+ * override, else TIERS_CONF_DEFAULT_PATH. Returns null when the file is
+ * unreadable (the hermetic-image case) — callers fall back via tierTable().
+ * Parse errors on a READABLE file still throw (a broken table must be loud).
+ *
+ * @param {{ path?: string, text?: string, env?: NodeJS.ProcessEnv }} [opts]
+ */
+export function loadTierTable({ path: confPath, text, env = process.env } = {}) {
+  if (text != null) return parseTiersConf(text);
+  const p = confPath ?? env.OPENCODE_TIERS_CONF ?? TIERS_CONF_DEFAULT_PATH;
+  let raw;
+  try {
+    raw = fs.readFileSync(p, 'utf8');
+  } catch {
+    return null;
+  }
+  return parseTiersConf(raw);
+}
+
+let cachedTierTable;
+/**
+ * The effective tier table: the parsed conf when readable, else the embedded
+ * FALLBACK_TIER_TABLE snapshot (contract-tested against the conf). Cached for
+ * the process lifetime — the table is static infrastructure identity.
+ */
+export function tierTable() {
+  if (cachedTierTable === undefined) {
+    cachedTierTable = loadTierTable() ?? FALLBACK_TIER_TABLE;
+  }
+  return cachedTierTable;
 }

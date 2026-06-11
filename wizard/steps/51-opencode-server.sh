@@ -14,21 +14,21 @@
 # idempotency means a live resident daemon (and anything mid-flight against
 # it) is never disturbed.
 #
-# Tier identity (mirrors scripts/opencode-server; host/llama-server/models.conf
-# is the single source of truth for GGUF + sampler):
-#   64 -> :11436  com.mac-llm-lab.opencode-server     RESIDENT (launchd)
-#   16 -> :11437  com.mac-llm-lab.opencode-server-16  RESIDENT (launchd)
-#   32 -> :11438  no plist BY DESIGN — on-demand only (decision §2.5)
+# Tier identity comes from THE single tier table (#016):
+# host/llama-server/tiers.conf — the same file scripts/opencode-server, oc and
+# the sweep driver resolve, so the wizard can never disagree with the launcher
+# it invokes. models.conf stays the MODEL table (GGUF + sampler).
 
-# step_51_resolve TIER — sets OC_PORT / OC_LABEL / OC_TEMPLATE.
-# Empty OC_LABEL means "no launchd path" (on-demand-only tier).
+# step_51_resolve TIER — sets OC_PORT / OC_LABEL / OC_TEMPLATE from tiers.conf.
+# Empty OC_LABEL means "no launchd path" (tiers.conf label "-", on-demand-only
+# tier). Returns 1 on an unknown tier or a missing table.
 step_51_resolve() {
-  case "$1" in
-    64) OC_PORT=11436; OC_LABEL="com.mac-llm-lab.opencode-server";    OC_TEMPLATE="qwen36-corrected.jinja" ;;
-    16) OC_PORT=11437; OC_LABEL="com.mac-llm-lab.opencode-server-16"; OC_TEMPLATE="qwen35-corrected.jinja" ;;
-    32) OC_PORT=11438; OC_LABEL="";                                   OC_TEMPLATE="qwen35-corrected.jinja" ;;
-    *)  return 1 ;;
-  esac
+  # shellcheck disable=SC1090,SC1091
+  source "${REPO_ROOT}/host/llama-server/tiers.conf" 2>/dev/null || return 1
+  tier_resolve "$1" || return 1
+  OC_PORT="$TIER_PORT"
+  OC_TEMPLATE="$TIER_TEMPLATE"
+  if [ "$TIER_LAUNCHD_LABEL" = "-" ]; then OC_LABEL=""; else OC_LABEL="$TIER_LAUNCHD_LABEL"; fi
 }
 
 step_51_loaded() {
@@ -44,12 +44,16 @@ step_51_is_done() {
   step_51_loaded && step_51_healthy
 }
 
-# Canonical template probe — DELEGATED to `opencode-server probe` (#011).
+# Canonical admission probe — DELEGATED to `opencode-server probe` (#011).
 # The previous curl-only twin asserted just 2 of cmd_probe's 3 template
 # invariants (it was born without the old-suite-#017 per-request
 # enable_thinking:false check), so a wizard-passing server could fail the
-# canonical probe. One oracle, one place. Still read-only: /apply-template
-# is template-only — no tokens are generated, safe against a busy server.
+# canonical probe. One oracle, one place. NOTE (#010/#016): the probe is NOT
+# read-only anymore — checks 1-3 are template-only /apply-template invariants,
+# but check 4 is the LIVE tool-call battery (N=6 real generations via
+# validate-tool-calls.sh, ~4-5 s on an idle server; the Layer-A admission
+# gate). Only invoked on the no-install branch — `opencode-server install`
+# runs the same probe itself as its final act (one battery per install path).
 # $1 = tier.
 step_51_probe() {
   ( cd "${REPO_ROOT}/host/llama-server" \
@@ -101,12 +105,14 @@ step_51_main() {
   if step_51_is_done; then
     skip "${OC_LABEL} already loaded and healthy on :${OC_PORT}"
     info "refusing to call \`launchctl bootout\` on a running service"
-    act "verifying live template via canonical probe (read-only, 3 invariants)"
+    # No install ran on this branch, so step 51 owns the probe seat here
+    # (#016 dedupe: exactly one battery-verified probe per install path).
+    act "verifying live server via canonical probe (template invariants + #010 tool-call battery)"
     if step_51_probe "$tier"; then
-      ok "canonical probe passed (system-not-first + thinking-off: launch default AND per-request)"
+      ok "canonical probe passed (system-not-first + thinking-off + tool-call battery)"
       return 0
     fi
-    fail "live server on :${OC_PORT} FAILED the canonical template probe"
+    fail "live server on :${OC_PORT} FAILED the canonical probe"
     info "debug: OPENCODE_TIER=${tier} host/llama-server/scripts/opencode-server probe"
     return 1
   fi
@@ -117,22 +123,21 @@ step_51_main() {
     return 0
   fi
   act "invoking opencode-server install (tier ${tier}, :${OC_PORT})"
+  # install waits for green /health (HEALTH_TIMEOUT, default 180 s) AND runs
+  # the canonical probe — template invariants + the #010 live tool-call
+  # battery — as its final act; a probe failure fails the install. Step 51
+  # therefore does NOT probe again here (#016 dedupe: the pre-dedupe flow ran
+  # the ~6-generation battery twice per wizard install — once in cmd_install,
+  # once here). The gate guarantee holds: this path's one battery-verified
+  # probe seat is inside install; the already-healthy branch above keeps its
+  # own seat because no install runs there.
   ( cd "${REPO_ROOT}/host/llama-server" \
       && OPENCODE_TIER="$tier" ./scripts/opencode-server install ) \
-    || { fail "opencode-server install failed"; return 1; }
-  # install itself waits for green /health (HEALTH_TIMEOUT, default 180 s).
+    || { fail "opencode-server install failed (health or canonical-probe gate)"; return 1; }
   if step_51_is_done; then
-    ok "opencode-server healthy on :${OC_PORT} (${OC_LABEL})"
+    ok "opencode-server healthy on :${OC_PORT} (${OC_LABEL}; probe gate passed inside install)"
   else
     fail "install returned but ${OC_LABEL} is not loaded+green on :${OC_PORT}"
-    return 1
-  fi
-  act "verifying live template via canonical probe (read-only, 3 invariants)"
-  if step_51_probe "$tier"; then
-    ok "canonical probe passed (system-not-first + thinking-off: launch default AND per-request)"
-  else
-    fail "server green but FAILED the canonical template probe"
-    info "debug: OPENCODE_TIER=${tier} host/llama-server/scripts/opencode-server probe"
     return 1
   fi
 }
