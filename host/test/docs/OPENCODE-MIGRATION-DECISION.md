@@ -86,7 +86,17 @@ markdown. Nothing irreplaceable remains.
    **GATE RESOLVED 2026-06-10 (#001): global `~/.config/opencode/AGENTS.md`
    wins — wire-level capture confirms it injects (git-rooted AND bare; the
    FINDING-2 bare-dir no-op was a behavioral false negative), `instructions[]`
-   also injects, control clean; details + oracle caveat in issues/001.**
+   also injects, control clean.**
+   *Oracle caveat (instrument of record):* the behavioral PROOF oracle
+   failed its known-positive validation — the 35B obeys a "MANDATORY first
+   action" instruction only stochastically (~20–60%) — so behavioral
+   obedience must never be used as an injection oracle. The replacement is
+   a wire-level capture oracle (in-container 127.0.0.1 mock recording
+   `/v1/chat/completions` request bodies), validated both ways
+   (rule present when committed, absent in control); `oc probe` implements
+   it. Recorded here from the migration suite's #001 ticket before the
+   completed suite was removed per repo convention (full tickets + worklog
+   remain in git history at the suite-closure commit).
 7. **Tier-32: adopt by extrapolation + functional smoke.** Tier-32 is the
    same 9B at Q5_K_XL, so the tier-16 finding transfers on model identity.
    With claw gone there is no comparative decision left — only serving

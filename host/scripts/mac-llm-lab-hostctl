@@ -16,11 +16,11 @@ HOST_REPO="${HOST_REPO:-$HOME/Desktop/bench/mac-llm-lab}"
 COMPOSE_DIR="${COMPOSE_DIR:-$HOST_REPO/host}"
 OPENUI_BASE="${OPENUI_BASE:-http://mac-llm-lab.local}"
 OLLAMA_API="${OLLAMA_API:-http://127.0.0.1:11434}"
-LLAMA_SERVER_API="${LLAMA_SERVER_API:-http://127.0.0.1:11435}"
 KEEP_ALIVE="${KEEP_ALIVE:-30m}"
 
-# `claw` lives on llama-server (grammar-constrained tool calls); the rest live on Ollama.
-PROFILES="general fast reasoning digest analyze claw"
+# OWUI chat profiles, all served by Ollama. (The coding stack — OpenCode +
+# llama-server — is managed by `oc` / `opencode-server`, not this script.)
+PROFILES="general fast reasoning digest analyze"
 
 # ---- utilities ----
 err()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -32,7 +32,7 @@ require_cmd() {
 
 profile_to_model() {
   case "$1" in
-    general|fast|reasoning|digest|analyze|claw) printf '%s' "$1" ;;
+    general|fast|reasoning|digest|analyze) printf '%s' "$1" ;;
     *) err "unknown profile: $1 (valid: $PROFILES)" ;;
   esac
 }
@@ -89,15 +89,6 @@ cmd_status() {
     printf 'unreachable: %s\n' "$OLLAMA_API"
   fi
 
-  printf '\n== llama-server (claw) ==\n'
-  if curl -fsS "$LLAMA_SERVER_API/health" >/dev/null 2>&1; then
-    model=$(curl -fsS "$LLAMA_SERVER_API/v1/models" 2>/dev/null \
-      | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("data",[{}])[0].get("id","?"))' 2>/dev/null)
-    printf 'reachable: %s (model=%s)\n' "$LLAMA_SERVER_API" "${model:-?}"
-  else
-    printf 'unreachable: %s\n' "$LLAMA_SERVER_API"
-  fi
-
   printf '\n== Loaded models (ollama ps) ==\n'
   if command -v ollama >/dev/null 2>&1; then
     ollama ps || true
@@ -109,24 +100,11 @@ cmd_status() {
 cmd_warm() {
   [ "${1:-}" ] || err "usage: mac-llm-lab-hostctl warm <profile>"
   profile=$(profile_to_model "$1")
-  case "$profile" in
-    claw)
-      # llama-server has KeepAlive=true via launchd, so the model is always
-      # resident. This is a reachability + first-token-latency probe, not a load.
-      log "warming claw on llama-server..."
-      curl -fsS -X POST "$LLAMA_SERVER_API/v1/chat/completions" \
-        -H 'Content-Type: application/json' \
-        -d '{"model":"claw","messages":[{"role":"user","content":"hi"}],"max_tokens":1}' \
-        >/dev/null || err "warm failed for claw"
-      ;;
-    *)
-      log "warming $profile on Ollama (keep_alive=$KEEP_ALIVE)..."
-      curl -fsS -X POST "$OLLAMA_API/api/generate" \
-        -H 'Content-Type: application/json' \
-        -d "{\"model\":\"$profile\",\"prompt\":\"\",\"keep_alive\":\"$KEEP_ALIVE\"}" \
-        >/dev/null || err "warm failed for $profile"
-      ;;
-  esac
+  log "warming $profile on Ollama (keep_alive=$KEEP_ALIVE)..."
+  curl -fsS -X POST "$OLLAMA_API/api/generate" \
+    -H 'Content-Type: application/json' \
+    -d "{\"model\":\"$profile\",\"prompt\":\"\",\"keep_alive\":\"$KEEP_ALIVE\"}" \
+    >/dev/null || err "warm failed for $profile"
   log "$profile warmed"
 }
 
@@ -160,7 +138,7 @@ Usage:
   mac-llm-lab-hostctl up                              bring stack up (idempotent)
   mac-llm-lab-hostctl down                            stop stack (volume preserved)
   mac-llm-lab-hostctl status                          health summary
-  mac-llm-lab-hostctl warm <profile>                  preload model (general|fast|reasoning|digest|analyze|claw)
+  mac-llm-lab-hostctl warm <profile>                  preload model (general|fast|reasoning|digest|analyze)
   mac-llm-lab-hostctl openui-url [-p P] [-q "..."]    print deep-link URL
 
 Env overrides:
@@ -168,8 +146,7 @@ Env overrides:
   COMPOSE_DIR        compose dir (default: \$HOST_REPO/host)
   OPENUI_BASE        external OWUI URL (default: http://mac-llm-lab.local)
   OLLAMA_API         local Ollama API (default: http://127.0.0.1:11434)
-  LLAMA_SERVER_API   local llama-server API (default: http://127.0.0.1:11435)
-  KEEP_ALIVE         Ollama warm duration (default: 30m); claw is always resident.
+  KEEP_ALIVE         Ollama warm duration (default: 30m)
 EOF
 }
 

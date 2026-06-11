@@ -49,6 +49,7 @@ $DR scripts/config-ab-normalized-ci.mjs docs/data/run_registry.sidecar-port-2026
 ```
 
 All six commands above were run against these committed copies on 2026-06-10
-(issue #005) and reproduced the published CIs verbatim; outputs are pasted in
-[issues/005-preserve-canonical-registries.md](../../../../issues/005-preserve-canonical-registries.md)
-§Result.
+(issue #005 of the migration suite) and reproduced the published CIs
+verbatim; outputs are pasted in that ticket's §Result (the completed suite
+was removed per repo convention — see `issues/005-preserve-canonical-registries.md`
+at commit `48e9db3` in git history).

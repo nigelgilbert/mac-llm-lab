@@ -79,8 +79,7 @@ Wiring delta vs the §4 plan (all landed):
 - `__tests__/lib/config-selector.test.js` — extended; all lib unit tests green
   (137 pass).
 
-This continues the OpenCode-vs-claw A/B (parent: [OPENCODE-AB-FINAL-REPORT.md](OPENCODE-AB-FINAL-REPORT.md),
-[OPENCODE-AB-SYNTHESIS-BRIEF.md](OPENCODE-AB-SYNTHESIS-BRIEF.md)). Prior verdict:
+This continues the OpenCode-vs-claw A/B (parent: [OPENCODE-AB-FINAL-REPORT.md](OPENCODE-AB-FINAL-REPORT.md)). Prior verdict:
 **RETIRE@tier-64** (oc +3.1pp), **KEEP@tier-16** (oc −7.7pp; normalized −5.5pp).
 
 ---
@@ -221,7 +220,7 @@ prompt-only because the grammar is a null arm (§1) — do **not** add a grammar
    baselines `claw-rig` and `opencode-a`.
 
 **Expectation to set:** prior `CLAUDE.md`-plant gave ≈ +0 at tier-32
-([TODO-GRAMMAR-PRELUDE.md](../../llama-server/docs/TODO-GRAMMAR-PRELUDE.md)). If `+prompt`
+(recorded in TODO-GRAMMAR-PRELUDE.md, deleted 2026-06-10; in git history). If `+prompt`
 also lands ≈0 at tier-16, the tier-16 claw advantage lives in the **harness loop / tool
 path** (not a droppable-in scaffold) → KEEP@16 is robust and there is **no cheap
 retire-the-bridge win at tier-16**. That is itself the answer to the user's question.

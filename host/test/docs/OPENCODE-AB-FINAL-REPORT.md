@@ -10,7 +10,8 @@ from a prior summary. Inputs: parent plan
 [OPENCODE-HARNESS-AB-PLAN.md](OPENCODE-HARNESS-AB-PLAN.md) (§0a rules, §0b oracle, §4
 design), per-tier verdicts [tier-64](OPENCODE-AB-TIER64-VERDICT.md) /
 [tier-16](OPENCODE-AB-TIER16-VERDICT.md), and the verified synthesis
-[brief](OPENCODE-AB-SYNTHESIS-BRIEF.md).
+brief (an interim handoff doc, fully absorbed into this report and
+deleted 2026-06-10; in git history).
 
 ---
 
