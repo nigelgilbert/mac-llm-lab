@@ -16,8 +16,15 @@
 //        --config-id   opencode-a+prompt \
 //        --registry    /workspace/.claw-runtime/run_registry.jsonl \
 //        [--run-id <id>]              # harvest just one run
-//        [--since <ms>]               # filter by run_started_ms
+//        [--since <ms>]               # filter by run_started_ms (must be a
+//                                     # finite number; non-numeric exits 2)
 //        [--dry-run]                  # validate + report; do not append
+//
+// IDEMPOTENT (issue #023): the target registry is read FIRST and any run_id
+// already present is skipped (reported as `skipped: already_in_registry`).
+// The script is not transactional — it can exit 1 mid-stream after some rows
+// appended, inviting an operator retry — so a re-run over the same
+// --runtime-root must never re-append rows and silently inflate per-task N.
 //
 // --config-id is REQUIRED (issue #009) and validated against lib/config.js's
 // VALID_CONFIGS. The sidecar cannot infer which A/B arm produced a run, and
@@ -51,7 +58,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { emitRow, assembleRow } from '../lib/run_row.js';
-import { validateRow } from '../lib/registry.js';
+import { validateRow, readRegistry, REGISTRY_PATH } from '../lib/registry.js';
 import { readManifest } from '../lib/test_manifest.js';
 import { VALID_CONFIGS } from '../lib/config.js';
 
@@ -72,7 +79,7 @@ function parseArgs(argv) {
     else if (k === '--config-id') opts.configId = a[++i];
     else if (k === '--registry') opts.registryPath = a[++i];
     else if (k === '--run-id') opts.runId = a[++i];
-    else if (k === '--since') opts.sinceMs = Number.parseInt(a[++i], 10);
+    else if (k === '--since') opts.sinceRaw = a[++i];
     else if (k === '--dry-run') opts.dryRun = true;
     else if (k === '--help' || k === '-h') { printHelp(); process.exit(0); }
     else { console.error(`unknown arg: ${k}`); printHelp(); process.exit(2); }
@@ -190,6 +197,20 @@ function main() {
     printHelp();
     process.exit(2);
   }
+  // Issue #023: a non-numeric --since used to parse to NaN, and every
+  // `run_started_ms < NaN` comparison is false — silently disabling the
+  // filter and harvesting EVERYTHING. Refuse before touching any artifact.
+  if (opts.sinceRaw !== undefined) {
+    const sinceMs = Number(opts.sinceRaw);
+    if (opts.sinceRaw === '' || !Number.isFinite(sinceMs)) {
+      console.error(
+        `--since "${opts.sinceRaw}" is not a finite number (expected ms since epoch); `
+        + 'a NaN would silently disable the filter and harvest everything.',
+      );
+      process.exit(2);
+    }
+    opts.sinceMs = sinceMs;
+  }
 
   const ctx = loadCtx(opts.ctxPath);
   // The CLI flag is the single source of the bundle label. A different
@@ -206,12 +227,29 @@ function main() {
   const testIdx = buildTestIndex(opts.testsDir);
   const runIds = listRunIds(opts.runtimeRoot, { runId: opts.runId, sinceMs: opts.sinceMs });
 
+  // Issue #023 idempotency: read the TARGET registry first and skip any
+  // run_id already present, so an operator retry after a mid-stream exit 1
+  // never re-appends rows (duplicates silently inflate per-task N downstream).
+  const registryTarget = opts.registryPath ?? REGISTRY_PATH;
+  const alreadyPresent = new Set(
+    readRegistry({ registryPath: registryTarget })
+      .map((r) => r.run_id)
+      .filter((id) => id != null),
+  );
+
   console.log(`harvesting ${runIds.length} run(s) from ${opts.runtimeRoot}`);
   console.log(`config_id: ${opts.configId} (stamped on every harvested row)`);
   console.log(`test_id index: ${Object.keys(testIdx).length} manifest(s) loaded from ${opts.testsDir}`);
+  console.log(`registry: ${registryTarget} (${alreadyPresent.size} run_id(s) already present will be skipped)`);
 
-  let ok = 0, skipped = 0, invalid = 0, appended = 0;
+  let ok = 0, skipped = 0, invalid = 0, appended = 0, alreadyInRegistry = 0;
   for (const runId of runIds) {
+    if (alreadyPresent.has(runId)) {
+      skipped += 1;
+      alreadyInRegistry += 1;
+      console.log(`  skip  ${runId} (skipped: already_in_registry)`);
+      continue;
+    }
     const result = harvestOne(runId, opts.runtimeRoot, ctx, testIdx);
     if (result.status === 'ok') {
       ok += 1;
@@ -239,6 +277,7 @@ function main() {
           elapsedMs: summary?.run_elapsed_ms ?? null,
         }, { ...ctx, ...rebuildCtxForRow(result.row), ...target });
         appended += 1;
+        alreadyPresent.add(runId); // guard within-invocation duplicates too
         console.log(`  appended ${runId} → ${result.row.test_id}`);
       }
     } else if (result.status === 'invalid') {
@@ -249,7 +288,7 @@ function main() {
       console.log(`  skip  ${runId} (${result.reason})`);
     }
   }
-  console.log(`\nsummary: ok=${ok} appended=${appended} invalid=${invalid} skipped=${skipped}`);
+  console.log(`\nsummary: ok=${ok} appended=${appended} invalid=${invalid} skipped=${skipped} already_in_registry=${alreadyInRegistry}`);
   process.exit(invalid > 0 ? 1 : 0);
 }
 

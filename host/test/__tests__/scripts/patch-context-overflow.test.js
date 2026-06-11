@@ -215,6 +215,63 @@ describe('patchRegistryRowOverflow — schema-field row patch, atomic, surgical'
     const reg = writeRegistry([eligibleFailureRow('someone-else')]);
     assert.equal(patchRegistryRowOverflow(reg, 'ghost').status, 'row_absent');
   });
+
+  // Issue #023: the patcher used to rewrite only the LAST matching line, so a
+  // duplicated run_id left the earlier copy mis-typed as an eligible failure.
+  it('duplicate run_id → EVERY matching line rewritten, line_nos names them all', () => {
+    const dup1 = eligibleFailureRow('dup-run');
+    const other = eligibleFailureRow('other-run');
+    const dup2 = { ...eligibleFailureRow('dup-run'), terminal_status: 'error' };
+    const reg = writeRegistry([dup1, other, dup2]);
+    const before = fs.readFileSync(reg, 'utf8').split('\n');
+
+    const res = patchRegistryRowOverflow(reg, 'dup-run');
+    assert.equal(res.status, 'patched');
+    assert.deepEqual(res.line_nos, [1, 3]);
+    assert.equal(res.line_no, 1);
+
+    const after = fs.readFileSync(reg, 'utf8').split('\n');
+    assert.equal(after[1], before[1]); // foreign row byte-identical
+    for (const i of [0, 2]) {
+      const row = JSON.parse(after[i]);
+      assert.equal(row.terminal_status, 'harness_error', `line ${i + 1} must be relabeled`);
+      assert.equal(row.passed, null);
+      assert.equal(row.harness_error, 'context_overflow');
+      assert.equal(isEligible(row), false);
+    }
+  });
+
+  it('duplicate run_id, one copy already typed → the other still gets patched', () => {
+    const typed = {
+      ...eligibleFailureRow('mix-run'),
+      terminal_status: 'harness_error', passed: null, harness_error: 'context_overflow',
+    };
+    const stale = eligibleFailureRow('mix-run');
+    const reg = writeRegistry([typed, stale]);
+
+    const res = patchRegistryRowOverflow(reg, 'mix-run');
+    assert.equal(res.status, 'patched');
+    assert.deepEqual(res.line_nos, [1, 2]); // every line now carrying the relabel
+
+    const rows = fs.readFileSync(reg, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    for (const row of rows) {
+      assert.equal(row.terminal_status, 'harness_error');
+      assert.equal(row.passed, null);
+    }
+  });
+
+  it('duplicate run_id, ALL copies already typed → already_typed, file untouched', () => {
+    const typed = {
+      ...eligibleFailureRow('all-typed'),
+      terminal_status: 'harness_error', passed: null, harness_error: 'context_overflow',
+    };
+    const reg = writeRegistry([typed, { ...typed }]);
+    const before = fs.readFileSync(reg, 'utf8');
+    const res = patchRegistryRowOverflow(reg, 'all-typed');
+    assert.equal(res.status, 'already_typed');
+    assert.deepEqual(res.line_nos, [1, 2]);
+    assert.equal(fs.readFileSync(reg, 'utf8'), before);
+  });
 });
 
 describe('scanAndPatchRunDir — end-to-end over the real fixture slice', () => {

@@ -1,5 +1,8 @@
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import { runAgent } from '../../lib/runAgent.js';
 
@@ -327,6 +330,204 @@ describe('runAgent pass oracle — workspace-only (issue #001)', () => {
     }));
     assert.ok(diagnostics.includes('no_workspace_oracle=1'));
     assert.equal(diagnostics.at(-1), 'runAgent_done=1');
+  });
+});
+
+// --- #024: spawnSync spawn-level failure shapes ------------------------------
+// spawnSync returns {error, status:null, stdout:null, stderr:null} when the
+// spawn itself fails (and {error:ETIMEDOUT, status:null} on a timeout kill).
+// Pre-#024 the post path TypeError'd on `post.stderr.slice` before the
+// diagnostics/sentinel, and the precondition gate's `status !== 0` check was
+// PASSED by status:null — a broken setup masquerading as satisfied.
+
+const tmpdirs = [];
+function makeTmp() {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'runagent-024-'));
+  tmpdirs.push(d);
+  return d;
+}
+after(() => {
+  for (const d of tmpdirs) fs.rmSync(d, { recursive: true, force: true });
+});
+
+// A runner-stub runDir with a real run_summary.json so the #024 relabel has a
+// sidecar to re-type (mirrors what lib/opencode.js writes for a clean run).
+function makeStubRunDir() {
+  const d = makeTmp();
+  fs.writeFileSync(path.join(d, 'run_summary.json'), JSON.stringify({
+    schema_version: 1,
+    run_id: 'run-024-stub',
+    test_id: 'unit-runAgent',
+    terminal_status: 'done',
+    exit_code: 0,
+    timeout: false,
+    passed: null,
+  }, null, 2) + '\n');
+  return d;
+}
+
+function readSummary(runDir) {
+  return JSON.parse(fs.readFileSync(path.join(runDir, 'run_summary.json'), 'utf8'));
+}
+
+// Empty PATH → spawnSync('node', ...) fails at the spawn level (ENOENT):
+// the canonical {error, status:null, stdout:null, stderr:null} shape without
+// needing a nonexistent interpreter baked into runAgent.
+function withEmptyPath(fn) {
+  const prior = process.env.PATH;
+  process.env.PATH = '';
+  return Promise.resolve(fn()).finally(() => { process.env.PATH = prior; });
+}
+
+function makeTCapture024() {
+  const diagnostics = [];
+  return {
+    t: { signal: new AbortController().signal, diagnostic: (m) => diagnostics.push(m) },
+    diagnostics,
+  };
+}
+
+describe('runAgent post-script spawn-level failure (#024)', () => {
+  it('ENOENT spawn failure → typed harness-error throw, no TypeError, diagnostics + sentinel still flush, sidecar relabeled', async () => {
+    const runDir = makeStubRunDir();
+    const { t, diagnostics } = makeTCapture024();
+    await assert.rejects(
+      () => withEmptyPath(() => runAgent({
+        ...BASE,
+        seedFiles: { 'post.js': 'process.exit(0)\n' },
+        postScript: 'post.js',
+        clawTimeoutMs: 60_000,
+        t,
+        runner: async () => ({ code: 0, stdout: '', stderr: '', elapsedMs: 1, runDir }),
+      })),
+      /runAgent harness error: post-script post\.js did not run/,
+    );
+    // post_result diagnostic landed (no TypeError before it) with the
+    // spawn-failure shape made explicit.
+    const postDiag = diagnostics.find((d) => d.startsWith('post_result='));
+    assert.ok(postDiag, 'post_result diagnostic must still be emitted');
+    const post = JSON.parse(postDiag.slice('post_result='.length));
+    assert.equal(post.status, null);
+    assert.equal(post.stderrTrim, '');
+    assert.match(post.spawn_error, /ENOENT|status=null/);
+    // Typed marker + sentinel, sentinel last.
+    assert.ok(diagnostics.includes('harness_error=post_script_spawn_failed'));
+    assert.equal(diagnostics.at(-1), 'runAgent_done=1');
+    // Sidecar relabeled → registry row will read harness_error/passed:null
+    // (run_row.pickTerminalStatus honors summary.terminal_status), NOT a
+    // passed:false model failure.
+    const summary = readSummary(runDir);
+    assert.equal(summary.terminal_status, 'harness_error');
+    assert.equal(summary.harness_error, 'post_script_spawn_failed');
+    assert.equal(summary.passed, null);
+    assert.match(summary.harness_error_detail, /status=null/);
+  });
+
+  it('timeout kill (status:null after SIGTERM) → harness error, not a model fail', async () => {
+    const runDir = makeStubRunDir();
+    const { t, diagnostics } = makeTCapture024();
+    await assert.rejects(
+      () => runAgent({
+        ...BASE,
+        seedFiles: { 'post.js': 'for(;;){}\n' }, // never exits → spawnSync timeout kill
+        postScript: 'post.js',
+        postScriptTimeoutMs: 1_000,
+        clawTimeoutMs: 60_000,
+        t,
+        runner: async () => ({ code: 0, stdout: '', stderr: '', elapsedMs: 1, runDir }),
+      }),
+      /runAgent harness error: post-script post\.js did not run/,
+    );
+    const post = JSON.parse(diagnostics.find((d) => d.startsWith('post_result=')).slice('post_result='.length));
+    assert.equal(post.status, null);
+    assert.equal(diagnostics.at(-1), 'runAgent_done=1');
+    assert.equal(readSummary(runDir).terminal_status, 'harness_error');
+    assert.equal(readSummary(runDir).harness_error, 'post_script_spawn_failed');
+  });
+
+  it('a post-script that RAN and failed stays a model failure (no relabel, no spawn_error)', async () => {
+    const runDir = makeStubRunDir();
+    const { t, diagnostics } = makeTCapture024();
+    await assert.rejects(
+      () => runAgent({
+        ...BASE,
+        seedFiles: { 'post.js': 'process.exit(1)\n' },
+        postScript: 'post.js',
+        clawTimeoutMs: 60_000,
+        t,
+        runner: async () => ({ code: 0, stdout: '', stderr: '', elapsedMs: 1, runDir }),
+      }),
+      /post-script failed/,
+    );
+    const post = JSON.parse(diagnostics.find((d) => d.startsWith('post_result=')).slice('post_result='.length));
+    assert.equal(post.status, 1);
+    assert.equal(post.spawn_error, undefined);
+    assert.equal(diagnostics.includes('harness_error=post_script_spawn_failed'), false);
+    assert.equal(readSummary(runDir).terminal_status, 'done'); // untouched
+  });
+});
+
+describe('runAgent precondition gate spawn-level failure (#024)', () => {
+  it('ENOENT spawn failure aborts as a harness error BEFORE the runner (gate not satisfied)', async () => {
+    const calls = [];
+    await assert.rejects(
+      () => withEmptyPath(() => runAgent({
+        ...BASE,
+        seedFiles: { 'pre.js': 'process.exit(1)\n' },
+        preconditionMustFail: 'pre.js',
+        clawTimeoutMs: 60_000,
+        t: makeT(),
+        runner: makeRunner(calls),
+      })),
+      /runAgent harness error: pre-condition pre\.js did not run/,
+    );
+    assert.equal(calls.length, 0, 'runner must not run when the precondition never executed');
+  });
+
+  it('timeout kill aborts as a harness error (status:null must not satisfy `must fail`)', async () => {
+    const calls = [];
+    await assert.rejects(
+      () => runAgent({
+        ...BASE,
+        seedFiles: { 'pre.js': 'for(;;){}\n' },
+        preconditionMustFail: 'pre.js',
+        preconditionTimeoutMs: 1_000,
+        clawTimeoutMs: 60_000,
+        t: makeT(),
+        runner: makeRunner(calls),
+      }),
+      /runAgent harness error: pre-condition pre\.js did not run/,
+    );
+    assert.equal(calls.length, 0);
+  });
+
+  it('a precondition that RAN and failed still satisfies the gate (runner proceeds)', async () => {
+    const calls = [];
+    await assert.doesNotReject(() => runAgent({
+      ...BASE,
+      seedFiles: { 'pre.js': 'process.exit(1)\n' },
+      preconditionMustFail: 'pre.js',
+      clawTimeoutMs: 60_000,
+      t: makeT(),
+      runner: makeRunner(calls),
+    }));
+    assert.equal(calls.length, 1);
+  });
+
+  it('a precondition that RAN and passed still fails the gate (must-fail semantics intact)', async () => {
+    const calls = [];
+    await assert.rejects(
+      () => runAgent({
+        ...BASE,
+        seedFiles: { 'pre.js': 'process.exit(0)\n' },
+        preconditionMustFail: 'pre.js',
+        clawTimeoutMs: 60_000,
+        t: makeT(),
+        runner: makeRunner(calls),
+      }),
+      /must fail before the fix/,
+    );
+    assert.equal(calls.length, 0);
   });
 });
 

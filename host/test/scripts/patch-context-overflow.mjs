@@ -53,6 +53,14 @@
 // client recovered — the sidecar gets context_overflow:true + provenance but
 // NO relabel, and the registry row is left alone.
 //
+// SINGLE-WRITER REQUIREMENT (issue #023): the registry rewrite here is
+// tmp-file + rename with NO locking. That is safe only because the driver is
+// strictly sequential — nothing else appends to or rewrites the registry
+// while this script runs. If a multi-writer topology (parallel arms,
+// concurrent emitters) ever becomes real, an interleaved append between our
+// read and rename would be silently dropped — file a locking issue then; do
+// not run this script concurrently with any registry writer.
+//
 // Exit codes (CLI):
 //   0 — no overflow found, or overflow found and everything needed was
 //       patched / already correct (incl. row_absent: the cell never emitted a
@@ -139,53 +147,69 @@ export function applyOverflowToSummary(summary, overflow) {
 }
 
 /**
- * Patch the registry row for runId in a JSONL registry, within schema fields
- * only (additionalProperties:false — see module header). Non-matching lines
- * are passed through BYTE-IDENTICAL (no reserialization). Atomic rewrite
- * (tmp + rename in the same dir). Returns one of:
- *   { status: 'patched', line_no }       row moved to harness_error/passed null
- *   { status: 'already_typed', line_no } row already carries the relabel
+ * Patch the registry row(s) for runId in a JSONL registry, within schema
+ * fields only (additionalProperties:false — see module header). EVERY line
+ * carrying the run_id is patched (#023): duplicates should not exist (the
+ * pairing gate's run_id-uniqueness invariant makes them loud), but the
+ * patcher must not depend on that — patching only the last match would leave
+ * an earlier copy mis-typed as an eligible failure. Non-matching lines are
+ * passed through BYTE-IDENTICAL (no reserialization). Atomic rewrite
+ * (tmp + rename in the same dir; single-writer — see module header).
+ * Returns one of:
+ *   { status: 'patched', line_no, line_nos }       ≥1 row moved to
+ *                                        harness_error/passed null; line_nos
+ *                                        lists every line now carrying the
+ *                                        relabel (patched + already-typed),
+ *                                        line_no is the first of them
+ *   { status: 'already_typed', line_no, line_nos } every matching row already
+ *                                        carries the relabel; file untouched
  *   { status: 'row_absent' }             no row with this run_id (cap-killed
  *                                        cell — the expected-attempts audit
  *                                        names it; nothing to patch here)
  *
  * @param {string} registryPath
  * @param {string} runId
- * @returns {{ status: string, line_no?: number }}
+ * @returns {{ status: string, line_no?: number, line_nos?: number[] }}
  */
 export function patchRegistryRowOverflow(registryPath, runId) {
   if (!fs.existsSync(registryPath)) return { status: 'row_absent' };
   const raw = fs.readFileSync(registryPath, 'utf8');
   const lines = raw.split('\n');
 
-  let found = -1;
-  let row = null;
+  const alreadyTyped = (row) =>
+    row.terminal_status === 'harness_error' &&
+    row.passed === null &&
+    row.harness_error === 'context_overflow';
+
+  const patchedLineNos = [];
+  const alreadyTypedLineNos = [];
   for (let i = 0; i < lines.length; i += 1) {
     const t = lines[i].trim();
     if (!t) continue;
     let parsed;
     try { parsed = JSON.parse(t); } catch { continue; }
-    if (parsed && parsed.run_id === runId) {
-      // Last match wins (run_ids are UUIDs; duplicates should not exist, but a
-      // re-emitted row would be the later, authoritative one).
-      found = i;
-      row = parsed;
+    if (!parsed || parsed.run_id !== runId) continue;
+    if (alreadyTyped(parsed)) {
+      alreadyTypedLineNos.push(i + 1);
+      continue;
     }
-  }
-  if (found === -1) return { status: 'row_absent' };
-
-  if (
-    row.terminal_status === 'harness_error' &&
-    row.passed === null &&
-    row.harness_error === 'context_overflow'
-  ) {
-    return { status: 'already_typed', line_no: found + 1 };
+    parsed.terminal_status = 'harness_error';
+    parsed.passed = null;
+    parsed.harness_error = 'context_overflow';
+    lines[i] = JSON.stringify(parsed);
+    patchedLineNos.push(i + 1);
   }
 
-  row.terminal_status = 'harness_error';
-  row.passed = null;
-  row.harness_error = 'context_overflow';
-  lines[found] = JSON.stringify(row);
+  if (patchedLineNos.length === 0 && alreadyTypedLineNos.length === 0) {
+    return { status: 'row_absent' };
+  }
+  if (patchedLineNos.length === 0) {
+    return {
+      status: 'already_typed',
+      line_no: alreadyTypedLineNos[0],
+      line_nos: alreadyTypedLineNos,
+    };
+  }
 
   const tmp = path.join(
     path.dirname(registryPath),
@@ -193,7 +217,8 @@ export function patchRegistryRowOverflow(registryPath, runId) {
   );
   fs.writeFileSync(tmp, lines.join('\n'));
   fs.renameSync(tmp, registryPath);
-  return { status: 'patched', line_no: found + 1 };
+  const lineNos = [...patchedLineNos, ...alreadyTypedLineNos].sort((a, b) => a - b);
+  return { status: 'patched', line_no: lineNos[0], line_nos: lineNos };
 }
 
 /**
@@ -206,7 +231,8 @@ export function patchRegistryRowOverflow(registryPath, runId) {
  * @param {{ registryPath: string, slicePath?: string }} opts
  * @returns {{ run_id: string, overflow: boolean, relabeled?: boolean,
  *             summary_changed?: boolean, registry?: string,
- *             registry_line?: number, detected_via?: string, line?: string }}
+ *             registry_line?: number, registry_lines?: number[],
+ *             detected_via?: string, line?: string }}
  */
 export function scanAndPatchRunDir(runDir, { registryPath, slicePath } = {}) {
   const summaryPath = path.join(runDir, 'run_summary.json');
@@ -238,7 +264,9 @@ export function scanAndPatchRunDir(runDir, { registryPath, slicePath } = {}) {
       `[overflow-patch] run ${runId}: context overflow in capture window ` +
       `(${overflow.line}) — sidecar ${changed ? 'patched' : 'already typed'}; ` +
       `registry row ${registry.status}` +
-      (registry.line_no ? ` (line ${registry.line_no} of ${registryPath})` : ''),
+      (registry.line_nos
+        ? ` (line${registry.line_nos.length > 1 ? 's' : ''} ${registry.line_nos.join(', ')} of ${registryPath})`
+        : ''),
     );
   } else {
     console.error(
@@ -254,6 +282,7 @@ export function scanAndPatchRunDir(runDir, { registryPath, slicePath } = {}) {
     summary_changed: changed,
     registry: registry.status,
     ...(registry.line_no ? { registry_line: registry.line_no } : {}),
+    ...(registry.line_nos ? { registry_lines: registry.line_nos } : {}),
     detected_via: patched.context_overflow_detected_via,
     line: overflow.line,
   };

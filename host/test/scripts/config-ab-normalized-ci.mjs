@@ -7,12 +7,20 @@
 // instead of dropped) but NO confidence interval — the canonical renderer drops
 // harness_error rows before bootstrapping, so it can only produce the −7.7 CI.
 //
-// This script closes that loose end. It reclassifies the claw-side
-// context-overflow `harness_error` rows as eligible FAILS (passed=false,
-// terminal_status → 'timeout', i.e. symmetric with how OpenCode's identical
-// budget-exhaustion failure mode already surfaces), then runs the SAME #015
+// This script closes that loose end. It reclassifies context-overflow
+// `harness_error` rows on BOTH sides of the comparison as eligible FAILS
+// (passed=false, terminal_status → 'timeout'), then runs the SAME #015
 // statistic (lib/paired_bootstrap.js, paired by test_id, B=10000, seed
 // 0xc0ffee) to get a real CI on the normalized delta.
+//
+// SYMMETRY (issue #021): the original cut reclassified only the BASELINE side.
+// That was numerically correct for the frozen tier-16 dataset (0 OpenCode
+// overflow harness_error rows there — oc overflows surfaced as eligible
+// timeouts), but post-#002 sweeps re-type OpenCode overflows to harness_error
+// too (patch-context-overflow.mjs). One-sided reclassification on such a
+// registry would count baseline overflows as fails while silently DROPPING
+// treatment overflows, biasing the sensitivity estimate toward the treatment.
+// Both sides are therefore reclassified, and the per-side counts are printed.
 //
 // This is a POST-HOC sensitivity analysis, not the pre-registered §0a decision.
 // The canonical verdict stands on the drop-harness_error rule. This only
@@ -23,10 +31,12 @@
 //   node scripts/config-ab-normalized-ci.mjs <registry.jsonl> --tier 16 [--seed 0xc0ffee] [--B 10000]
 //       [--treatment opencode-a] [--baseline claw-rig]
 //
-// Exit codes: 0 on a successful render; 2 = bad args.
+// Exit codes: 0 on a successful render; 1 = statistic could not be computed
+// (PairedBootstrapError, e.g. no paired tasks); 2 = bad args.
 
 import { readRegistry } from '../lib/registry.js';
-import { pairedBootstrapCI } from '../lib/paired_bootstrap.js';
+import { pairedBootstrapCI, PairedBootstrapError } from '../lib/paired_bootstrap.js';
+import { VALID_CONFIGS } from '../lib/config.js';
 
 const MARGIN_PP = 5;
 
@@ -43,7 +53,17 @@ function parseArgs(argv) {
     else { console.error(`unexpected arg: ${a[i]}`); process.exit(2); }
   }
   if (!opts.registryPath) {
-    console.error('usage: config-ab-normalized-ci.mjs <registry.jsonl> --tier 16 [--seed N] [--B N]');
+    console.error('usage: config-ab-normalized-ci.mjs <registry.jsonl> --tier 16 [--seed N] [--B N] [--treatment ID] [--baseline ID]');
+    process.exit(2);
+  }
+  for (const side of ['treatment', 'baseline']) {
+    if (!VALID_CONFIGS.includes(opts[side])) {
+      console.error(`--${side} "${opts[side]}" is not in VALID_CONFIGS {${VALID_CONFIGS.join(', ')}}`);
+      process.exit(2);
+    }
+  }
+  if (opts.treatment === opts.baseline) {
+    console.error('--treatment and --baseline must differ');
     process.exit(2);
   }
   return opts;
@@ -54,18 +74,21 @@ function main() {
   const all = readRegistry({ registryPath });
   const rows = tier == null ? all : all.filter((r) => r.hardware_tier === tier);
 
-  // Reclassify: claw-side context-overflow harness_error → eligible fail.
-  // (All tier-16 claw harness_error rows are context_overflow; OpenCode's same
-  // failure mode is already an eligible `timeout` fail, so this makes the two
-  // serving stacks symmetric in how budget exhaustion counts against them.)
-  let reclassified = 0;
+  // Reclassify: context-overflow harness_error → eligible fail, on BOTH sides
+  // of the comparison (issue #021 — symmetric by construction, so a post-#002
+  // registry whose treatment-side overflows are also typed harness_error
+  // cannot have them silently dropped while the baseline's count as fails).
+  // Rows belonging to neither side are left untouched; summarizeTasks filters
+  // them out anyway, and the printed per-side counts stay exact in multi-arm
+  // registries.
+  const reclassified = { [BASELINE]: 0, [TREATMENT]: 0 };
   const normalized = rows.map((r) => {
     if (
-      r.config_id === BASELINE &&
+      (r.config_id === BASELINE || r.config_id === TREATMENT) &&
       r.terminal_status === 'harness_error' &&
       r.harness_error === 'context_overflow'
     ) {
-      reclassified += 1;
+      reclassified[r.config_id] += 1;
       return { ...r, passed: false, terminal_status: 'timeout' };
     }
     return r;
@@ -81,7 +104,7 @@ function main() {
   console.log('=== tier-16 normalized-treatment sensitivity (post-hoc) ===');
   console.log(`registry      : ${registryPath}`);
   console.log(`bootstrap     : B=${B}  seed=0x${(seed >>> 0).toString(16)}`);
-  console.log(`reclassified  : ${reclassified} claw context-overflow harness_error rows → eligible fails`);
+  console.log(`reclassified  : ${reclassified[BASELINE]} baseline (${BASELINE}) + ${reclassified[TREATMENT]} treatment (${TREATMENT}) context-overflow harness_error rows → eligible fails`);
   console.log('');
   console.log(`canonical (drop overflow)     : ${fmt(canonical)}   [pre-registered]`);
   console.log(`normalized (overflow = fail)  : ${fmt(norm)}   [sensitivity]`);
@@ -93,4 +116,12 @@ function main() {
   process.exit(0);
 }
 
-main();
+try {
+  main();
+} catch (e) {
+  if (e instanceof PairedBootstrapError) {
+    console.error(`\nFAIL: ${e.message}`);
+    process.exit(1);
+  }
+  throw e;
+}

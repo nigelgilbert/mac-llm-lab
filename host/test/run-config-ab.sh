@@ -214,6 +214,14 @@ STAMP="$(date +%Y%m%d-%H%M%S)"
 OC_SWEEP_ID="config-ab-${STAMP}-$$"
 CLAW_RT_DIR="$REPO_DIR/host/test/.claw-runtime"
 HOST_REG="${REGISTRY_OUT:-$CLAW_RT_DIR/run_registry.config-ab-${STAMP}.jsonl}"
+# Containment (#020): the prefix match alone accepts "$CLAW_RT_DIR/../escape" —
+# reject any '..' path segment FIRST so the must-live-under-the-gitignored-
+# runtime-root invariant (which the REUSE_ROWS protections rest on) actually
+# holds. ('..' as a full segment only: a literal filename like "run..jsonl"
+# stays legal.)
+case "/$HOST_REG/" in
+  */../*) err "REGISTRY_OUT must not contain '..' path segments (containment under $CLAW_RT_DIR is prefix-checked; '..' would escape it); got: $HOST_REG" ;;
+esac
 case "$HOST_REG" in
   "$CLAW_RT_DIR"/*) : ;;
   *) err "REGISTRY_OUT must be a path under $CLAW_RT_DIR (gitignored runtime root; visible through the path-matched repo mount); got: $HOST_REG" ;;
@@ -364,7 +372,27 @@ cleanup() {
     OPENCODE_TIER="$TIER" "$OC_SERVER" stop >/dev/null 2>&1 || true
   fi
 }
-trap cleanup EXIT INT TERM
+# #020: the signal path MUST NOT share the EXIT trap. A bash trap handler
+# returns to the interrupted command, so `trap cleanup EXIT INT TERM` ran
+# cleanup on Ctrl-C — killing the ticker, reaping the sweep's containers,
+# stopping any driver-started server — and then RESUMED the sweep: capture
+# pass, next arm, every cell against a dead server, emitting schema-valid
+# error/timeout rows with the overflow scan disarmed. Split paths: signals
+# clean up once, disarm the EXIT trap (so cleanup never runs twice), and
+# terminate with the conventional 128+SIGINT code.
+on_interrupt() {
+  log ""
+  log "!! ============================================================"
+  log "!! SWEEP INTERRUPTED (SIGINT/SIGTERM) — cleaning up and terminating."
+  log "!! No further arms, cells, capture passes, audits or gates will run."
+  log "!! Registry rows emitted so far remain at: $HOST_REG"
+  log "!! ============================================================"
+  cleanup
+  trap - EXIT
+  exit 130
+}
+trap cleanup EXIT
+trap on_interrupt INT TERM
 
 log "==> run-config-ab.sh  tier=$TIER  tests=[$SMOKE_TESTS] repeats=$REPEATS"
 log "    arms=[$ARMS]  baseline=$BASELINE  reuse_rows=$REUSE_ROWS"
@@ -506,13 +534,14 @@ stop_timings_ticker() {
 #      on flag-on sweeps and must not silently not-happen.
 post_arm_capture_pass() {
   local rs rd window sb eb winsz eof_sz n_sliced=0 n_repaired=0 n_frozen=0 n_overflow=0
-  local summaries oc_out
-  summaries="$(find "$OC_RT_ROOT" -mindepth 2 -maxdepth 2 -name run_summary.json -newer "$ARM_STAMP" 2>/dev/null || true)"
-  if [ -z "$summaries" ]; then
-    log "[post-arm] no fresh runDirs since arm start — nothing to inspect"
-    return 0
-  fi
-  for rs in $summaries; do
+  local oc_out n_found=0
+  # #020: NUL-delimited walk — the old `for rs in $summaries` word-split find's
+  # output, so a runDir path containing whitespace fragmented into bogus paths
+  # (every slice/repair/overflow scan logged OVERFLOW-SCAN-GAP and the #002
+  # relabels were silently skipped). Process substitution (not a pipeline) so
+  # the loop body runs in THIS shell and its OVERFLOW_RC mutation survives.
+  while IFS= read -r -d '' rs; do
+    n_found=$((n_found + 1))
     rd="$(dirname "$rs")"
     # ---- 1. slice (every fresh runDir) ------------------------------------
     eof_sz="$(stat -f %z "$HOST_LLAMA_LOG" 2>/dev/null || echo 0)"
@@ -566,7 +595,11 @@ post_arm_capture_pass() {
       log "ERROR: [overflow-patch] FAILED for $rd ($oc_out) — a context-overflow row may be entering the gate as an eligible failure; sweep will exit 2 (#002)"
       OVERFLOW_RC=1
     fi
-  done
+  done < <(find "$OC_RT_ROOT" -mindepth 2 -maxdepth 2 -name run_summary.json -newer "$ARM_STAMP" -print0 2>/dev/null)
+  if [ "$n_found" -eq 0 ]; then
+    log "[post-arm] no fresh runDirs since arm start — nothing to inspect"
+    return 0
+  fi
   log "[post-arm] arm summary: $n_sliced runDir(s) sliced, $n_frozen frozen, $n_repaired repaired, $n_overflow overflow-typed (OVERFLOW_RC=$OVERFLOW_RC)"
 }
 

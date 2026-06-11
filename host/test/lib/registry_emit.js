@@ -38,7 +38,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { emitRow } from './run_row.js';
+import { emitRow, assembleRow } from './run_row.js';
 import { readManifest } from './test_manifest.js';
 import { resolveConfigId, modelConfigIdFor } from './config.js';
 
@@ -53,6 +53,13 @@ export function writeAssertionResult(runDir, payload) {
     console.error(
       `[iter-distribution] writeAssertionResult failed for ${runDir}: ${e.message}`,
     );
+    // #024 (same discipline as the emit catch below, #006): a lost assertion
+    // sidecar must fail the cell's rc, not ride stderr-only — without the
+    // sidecar the row would land as done/passed:null and silently shrink the
+    // pass-rate denominator. Still never throws (see header); the emit path
+    // below additionally stamps the row harness_error:'assertion_emit_failed'
+    // so the loss is visible in the registry, not just in the rc.
+    process.exitCode = 1;
   }
   if (process.env.RUN_REGISTRY_EMIT === '1') {
     try {
@@ -106,7 +113,7 @@ function maybeEmitRegistryRow(runDir) {
   const tier = parseInt(tierStr, 10);
   const memory = parseInt(process.env.RUN_REGISTRY_MEMORY_GB || String(tier), 10);
 
-  const ctx = {
+  let ctx = {
     run_kind: process.env.RUN_REGISTRY_KIND || 'smoke',
     hardware_tier: tier,
     memory_gb: memory,
@@ -119,7 +126,7 @@ function maybeEmitRegistryRow(runDir) {
     canonical_status: process.env.RUN_REGISTRY_CANONICAL_STATUS || 'canonical',
   };
 
-  const written = emitRow({
+  const runnerShape = {
     runId: summary.run_id,
     runDir,
     iterationsPath: path.join(runDir, 'iterations.jsonl'),
@@ -132,6 +139,37 @@ function maybeEmitRegistryRow(runDir) {
     timeout: !!summary.timeout,
     signal: null,
     elapsedMs: summary.run_elapsed_ms ?? null,
-  }, ctx);
+  };
+
+  // #024: probe the assembled row (pure; no append) so two silent-shrink
+  // shapes become visibly typed instead of riding stderr-only:
+  //   1. A model-terminal row (done/error/timeout) with NO assertion verdict
+  //      (passed:null) — the assertion_result.json sidecar write failed
+  //      (writeAssertionResult's catch above already failed the rc), so the
+  //      row is stamped harness_error:'assertion_emit_failed' (the category
+  //      run_registry.schema.json's harness_error description names).
+  //      paired_bootstrap.isEligible already excludes it (passed is not
+  //      boolean) — the stamp makes the exclusion auditable.
+  //      'interrupted' rows are NOT stamped: passed:null is their normal,
+  //      already-typed shape.
+  //   2. A harness_error row whose run_summary sidecar carries a typed
+  //      harness_error string (e.g. runAgent's 'post_script_spawn_failed'
+  //      relabel, #024) that run_row.js would otherwise drop on the floor
+  //      (it only derives 'context_overflow' itself) — promote it to the row.
+  const probe = assembleRow(runnerShape, ctx);
+  const modelTerminal = probe.terminal_status === 'done'
+    || probe.terminal_status === 'error'
+    || probe.terminal_status === 'timeout';
+  if (modelTerminal && probe.passed === null && probe.harness_error == null) {
+    ctx = { ...ctx, harness_error: 'assertion_emit_failed' };
+  } else if (
+    probe.terminal_status === 'harness_error'
+    && probe.harness_error == null
+    && typeof summary.harness_error === 'string'
+  ) {
+    ctx = { ...ctx, harness_error: summary.harness_error };
+  }
+
+  const written = emitRow(runnerShape, ctx);
   console.error(`[run-registry] appended ${test_id} row → ${written}`);
 }

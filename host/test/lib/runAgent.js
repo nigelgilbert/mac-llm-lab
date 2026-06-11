@@ -192,6 +192,19 @@ export async function runAgent({
         encoding: 'utf8',
         timeout:  preconditionTimeoutMs,
       });
+      // #024: spawnSync's spawn-level failure shape is {error, status:null} —
+      // which would PASS the bare `status !== 0` gate below, letting a broken
+      // precondition setup (interpreter missing, timeout kill) masquerade as
+      // "fails before the fix". Abort as a harness error first: the script
+      // must have actually RUN and failed for the gate to mean anything.
+      assert.ok(
+        pre.error == null && pre.status !== null,
+        `runAgent harness error: pre-condition ${preconditionMustFail} did not run ` +
+        `(spawn-level failure or timeout kill: status=${pre.status}` +
+        `${pre.signal ? `, signal=${pre.signal}` : ''}` +
+        `${pre.error ? `, error=${pre.error.message}` : ''}) — ` +
+        'a precondition that never executed must not satisfy the must-fail gate',
+      );
       assert.notEqual(
         pre.status, 0,
         `pre-condition: ${preconditionMustFail} must fail before the fix`,
@@ -218,17 +231,30 @@ export async function runAgent({
     })}`);
 
     let post = null;
+    let postSpawnFailure = null;
     if (postScript) {
       post = spawnSync('node', [path.join(workspace.WORKSPACE, postScript)], {
         encoding: 'utf8',
         timeout:  postScriptTimeoutMs,
         cwd:      workspace.WORKSPACE,
       });
+      // #024: spawnSync's spawn-level failure shape is {error, status:null,
+      // stdout:null, stderr:null} (a timeout kill is {error:ETIMEDOUT,
+      // status:null} with captured streams). The oracle never rendered a
+      // verdict, so this is a HARNESS error, not a model fail — and the null
+      // streams must not TypeError before the diagnostic/sentinel flush.
+      const postStderr = post.stderr ?? '';
+      if (post.error != null || post.status === null) {
+        postSpawnFailure = `status=${post.status}`
+          + `${post.signal ? `, signal=${post.signal}` : ''}`
+          + `${post.error ? `, error=${post.error.message}` : ''}`;
+      }
       t.diagnostic(`post_result=${JSON.stringify({
         script:     postScript,
         status:     post.status,
-        stderrTrim: post.stderr.slice(0, 400),
-        stderrTail: post.stderr.slice(-POST_STDERR_TAIL),
+        stderrTrim: postStderr.slice(0, 400),
+        stderrTail: postStderr.slice(-POST_STDERR_TAIL),
+        ...(postSpawnFailure ? { spawn_error: postSpawnFailure } : {}),
       })}`);
     }
 
@@ -250,6 +276,19 @@ export async function runAgent({
       t.diagnostic('no_workspace_oracle=1');
     }
 
+    // #024: a post-script spawn-level failure means the workspace oracle never
+    // ran — relabel the run sidecar so the registry row lands as a typed
+    // harness_error (excluded from pass denominators by
+    // paired_bootstrap.isEligible) instead of a plain passed:false model
+    // failure. Same sidecar-relabel mechanism as the #002 context-overflow
+    // patcher; run_row.js reads summary.terminal_status first, and
+    // registry_emit.js promotes summary.harness_error onto the row. Emitted
+    // before the sentinel so the reporter's flush sees the relabeled sidecar.
+    if (postSpawnFailure) {
+      t.diagnostic('harness_error=post_script_spawn_failed');
+      relabelRunSummaryHarnessError(agent.runDir, 'post_script_spawn_failed', postSpawnFailure);
+    }
+
     // Sentinel for the registry reporter's per-test flush. Emitted BEFORE the
     // pass assertion so the sidecar/registry row is written for fails too (the
     // reporter derives `passed` from node:test's own verdict, and post_result
@@ -263,10 +302,23 @@ export async function runAgent({
     // test bodies. Throws on failure (the assertion carries no diagnostic, so
     // runAgent_done stays the final diagnostic). When there is no post-script
     // the verdict is left to the body's own per-test invariants.
+    //
+    // #024: a spawn-level failure throws a DISTINCT harness error before the
+    // pass assertion — the oracle never executed, so `post.status !== 0` is
+    // not a model verdict (and the sidecar relabel above has already re-typed
+    // the row). node:test still marks the test failed, but the registry row
+    // reads harness_error/passed:null, not done/passed:false.
     if (post) {
+      if (postSpawnFailure) {
+        throw new Error(
+          `runAgent harness error: post-script ${postScript} did not run ` +
+          `(spawn-level failure or timeout kill: ${postSpawnFailure}); ` +
+          'run relabeled harness_error=post_script_spawn_failed, not a model failure',
+        );
+      }
       assert.equal(
         post.status, 0,
-        `post-script failed:\n${post.stderr.slice(0, 800)}`,
+        `post-script failed:\n${(post.stderr ?? '').slice(0, 800)}`,
       );
     }
 
@@ -277,6 +329,34 @@ export async function runAgent({
     // "undefined" — collectRunArtifacts would then bake that into run_summary.
     if (priorTestIdEnv === undefined) delete process.env.ITER_DIST_TEST_ID;
     else process.env.ITER_DIST_TEST_ID = priorTestIdEnv;
+  }
+}
+
+// #024: best-effort relabel of the run sidecar's run_summary.json to a typed
+// harness_error. Same mechanism as the #002 context-overflow patcher
+// (scripts/patch-context-overflow.mjs): run_row.pickTerminalStatus honors
+// summary.terminal_status first, so the registry row assembled from this
+// sidecar lands as terminal_status:'harness_error' / passed:null (ineligible
+// per paired_bootstrap.isEligible), and registry_emit.js promotes
+// summary.harness_error onto the row's harness_error field. Best-effort:
+// a relabel failure is logged, and the caller's typed throw still fails the
+// test loudly (the row then degrades to an eligible passed:false — visible,
+// not silent).
+function relabelRunSummaryHarnessError(runDir, harnessError, detail) {
+  if (typeof runDir !== 'string' || runDir.length === 0) {
+    console.error(`[runAgent] cannot relabel run_summary (no runDir): harness_error=${harnessError} (${detail})`);
+    return;
+  }
+  const p = path.join(runDir, 'run_summary.json');
+  try {
+    const summary = JSON.parse(fs.readFileSync(p, 'utf8'));
+    summary.terminal_status = 'harness_error';
+    summary.harness_error = harnessError;
+    summary.harness_error_detail = detail;
+    summary.passed = null;
+    fs.writeFileSync(p, JSON.stringify(summary, null, 2) + '\n');
+  } catch (e) {
+    console.error(`[runAgent] failed to relabel ${p} as harness_error=${harnessError}: ${e.message}`);
   }
 }
 
