@@ -19,15 +19,16 @@
 # the sweep driver resolve, so the wizard can never disagree with the launcher
 # it invokes. models.conf stays the MODEL table (GGUF + sampler).
 
-# step_51_resolve TIER — sets OC_PORT / OC_LABEL / OC_TEMPLATE from tiers.conf.
-# Empty OC_LABEL means "no launchd path" (tiers.conf label "-", on-demand-only
-# tier). Returns 1 on an unknown tier or a missing table.
+# step_51_resolve TIER — sets OC_PORT / OC_LABEL / OC_TEMPLATE / OC_LOG from
+# tiers.conf. Empty OC_LABEL means "no launchd path" (tiers.conf label "-",
+# on-demand-only tier). Returns 1 on an unknown tier or a missing table.
 step_51_resolve() {
   # shellcheck disable=SC1090,SC1091
   source "${REPO_ROOT}/host/llama-server/tiers.conf" 2>/dev/null || return 1
   tier_resolve "$1" || return 1
   OC_PORT="$TIER_PORT"
   OC_TEMPLATE="$TIER_TEMPLATE"
+  OC_LOG="$TIER_LOG_PATH"
   if [ "$TIER_LAUNCHD_LABEL" = "-" ]; then OC_LABEL=""; else OC_LABEL="$TIER_LAUNCHD_LABEL"; fi
 }
 
@@ -117,10 +118,45 @@ step_51_main() {
     return 1
   fi
   if step_51_loaded && ! step_51_healthy; then
-    warn "service loaded but :${OC_PORT}/health not responding"
-    info "this may be a model that's still loading; not touching it"
-    info "wait 60s and re-run the wizard if the issue persists"
-    return 0
+    # #029: never return 0 on a red daemon. A crash-looping service (e.g. a
+    # stale GGUF path under the new conditional-KeepAlive plists) also reads
+    # "loaded but not healthy"; silently passing here deferred the failure to
+    # step 61's 240 s smoke wait. Poll long enough for a legitimate cold model
+    # load (tier-64 ≈ 21 GB; same 180 s bound as the launcher's
+    # HEALTH_TIMEOUT), then FAIL the step with the daemon's own log lines so
+    # the cause is visible at the step that owns it. Still never touches the
+    # service (no bootout) — strict idempotency holds.
+    local wait_s waited=0
+    wait_s="${WIZARD_OC_HEALTH_WAIT:-180}"
+    warn "service ${OC_LABEL} loaded but :${OC_PORT}/health not responding"
+    act "polling /health up to ${wait_s}s (cold model load; a crash-looping daemon never goes green)"
+    while [ "$waited" -lt "$wait_s" ]; do
+      sleep 3; waited=$((waited+3))
+      step_51_healthy && break
+    done
+    if step_51_healthy; then
+      ok "service went green on :${OC_PORT} after ~${waited}s (model load)"
+      # No install ran on this branch either — step 51 owns the probe seat
+      # here, exactly like the already-healthy branch above (#016 dedupe).
+      act "verifying live server via canonical probe (template invariants + #010 tool-call battery)"
+      if step_51_probe "$tier"; then
+        ok "canonical probe passed (system-not-first + thinking-off + tool-call battery)"
+        return 0
+      fi
+      fail "live server on :${OC_PORT} FAILED the canonical probe"
+      info "debug: OPENCODE_TIER=${tier} host/llama-server/scripts/opencode-server probe"
+      return 1
+    fi
+    fail "${OC_LABEL} loaded but :${OC_PORT}/health never went green within ${wait_s}s — likely crash-looping (stale GGUF path / bad config?)"
+    if [ -f "$OC_LOG" ]; then
+      info "last daemon log lines (${OC_LOG}):"
+      tail -n 12 "$OC_LOG" 2>/dev/null | sed 's/^/      /'
+    else
+      info "no daemon log at ${OC_LOG}"
+    fi
+    info "debug: launchctl print gui/$(id -u)/${OC_LABEL} ; tail -50 ${OC_LOG}"
+    info "recover: fix models.conf, then OPENCODE_TIER=${tier} host/llama-server/scripts/opencode-server install"
+    return 1
   fi
   act "invoking opencode-server install (tier ${tier}, :${OC_PORT})"
   # install waits for green /health (HEALTH_TIMEOUT, default 180 s) AND runs

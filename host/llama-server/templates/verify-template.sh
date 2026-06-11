@@ -44,11 +44,35 @@ MODEL="$(pick_model)"
 
 LOG="$(mktemp -t tplverify.XXXXXX.log)"
 SRV_PID=""
-cleanup() { [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null || true; }
-trap cleanup EXIT
+STOP_TIMEOUT="${STOP_TIMEOUT:-30}"  # SIGTERM grace before SIGKILL (multi-GB unload)
+cleanup() {
+  if [ -n "$SRV_PID" ] && kill -0 "$SRV_PID" 2>/dev/null; then
+    kill "$SRV_PID" 2>/dev/null || true
+    # Bounded wait for the dying server to actually exit (#028; mirrors
+    # opencode-server cmd_stop from the #005 remediation): a multi-GB
+    # llama-server can take seconds to unload, and without this wait the
+    # next boot()'s lsof preflight sees the dying server still LISTENing
+    # and exits 2 "port busy" — reliably failing the second --diff boot.
+    local waited=0
+    while kill -0 "$SRV_PID" 2>/dev/null && [ "$waited" -lt "$STOP_TIMEOUT" ]; do
+      sleep 1; waited=$((waited+1))
+    done
+    if kill -0 "$SRV_PID" 2>/dev/null; then
+      echo "  pid $SRV_PID still alive ${STOP_TIMEOUT}s after SIGTERM — escalating to SIGKILL" >&2
+      kill -9 "$SRV_PID" 2>/dev/null || true
+      sleep 1
+    fi
+    # brief grace so the kernel releases the LISTEN socket before any re-bind
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      lsof -nP -iTCP:"$PORT" 2>/dev/null | grep -q LISTEN || break; sleep 1
+    done
+  fi
+  SRV_PID=""
+}
+trap 'cleanup; rm -f "${RJSON:-}" "${POUT:-}"' EXIT
 
 boot() { # $1 = template file
-  cleanup; SRV_PID=""
+  cleanup
   if lsof -nP -iTCP:"$PORT" 2>/dev/null | grep -q LISTEN; then
     echo "ERROR: port $PORT busy (refusing to touch it)"; exit 2
   fi
@@ -65,12 +89,16 @@ boot() { # $1 = template file
 
 # render <json-body>: sets global RCODE and writes prompt text to $POUT.
 # Must NOT be called inside $(...) — that would run it in a subshell and lose RCODE.
-POUT=/tmp/_tplv_prompt.txt
+# Per-invocation mktemp scratch (#028): fixed /tmp paths made concurrent runs
+# clobber each other's renders. Cleaned up in the EXIT trap above.
+POUT="$(mktemp -t tplv_prompt.XXXXXX.txt)"
+RJSON="$(mktemp -t tplv_resp.XXXXXX.json)"
+echo "scratch  : json=$RJSON prompt=$POUT"
 RCODE=""
 render() {
-  RCODE=$(curl -s -o /tmp/_tplv.json -w '%{http_code}' -X POST "$BASE/apply-template" \
+  RCODE=$(curl -s -o "$RJSON" -w '%{http_code}' -X POST "$BASE/apply-template" \
     -H 'content-type: application/json' -d "$1")
-  python3 -c "import json; d=json.load(open('/tmp/_tplv.json')); print(d.get('prompt',''))" \
+  python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('prompt',''))" "$RJSON" \
     > "$POUT" 2>/dev/null || : > "$POUT"
 }
 
@@ -79,6 +107,13 @@ M_SYS_NOT_FIRST='{"messages":[{"role":"user","content":"hi"},{"role":"system","c
 M_TOOLS_SYS_NOT_FIRST='{"messages":[{"role":"user","content":"hi"},{"role":"system","content":"SYSTEM_SENTINEL_42"},{"role":"user","content":"make x.py"}],"tools":[{"type":"function","function":{"name":"write_file","description":"w","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}}]}'
 M_SYS_FIRST='{"messages":[{"role":"system","content":"SYSTEM_SENTINEL_42"},{"role":"user","content":"hi"}]}'
 M_TOOLCALL='{"messages":[{"role":"user","content":"make x.py"},{"role":"assistant","content":null,"tool_calls":[{"type":"function","function":{"name":"write_file","arguments":{"path":"x.py","content":"print(1)"}}}]},{"role":"tool","content":"ok"}],"tools":[{"type":"function","function":{"name":"write_file","description":"w","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}}]}'
+# #028: identical to M_TOOLCALL except "arguments" is the OpenAI-wire JSON
+# *string* (what OpenCode echoes back in multi-turn history), not an object.
+# The corrected templates gate the parameter loop on `arguments is mapping`,
+# so this render only contains <parameter=...> lines if minja's
+# requires_object_arguments polyfill converts string→object first. The
+# fixture pins that polyfill against llama.cpp build upgrades.
+M_TOOLCALL_STRARGS='{"messages":[{"role":"user","content":"make x.py"},{"role":"assistant","content":null,"tool_calls":[{"type":"function","function":{"name":"write_file","arguments":"{\"path\":\"x.py\",\"content\":\"print(1)\"}"}}]},{"role":"tool","content":"ok"}],"tools":[{"type":"function","function":{"name":"write_file","description":"w","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}}]}'
 M_THINK_OFF='{"messages":[{"role":"user","content":"hi"}],"chat_template_kwargs":{"enable_thinking":false}}'
 M_THINK_ON='{"messages":[{"role":"user","content":"hi"}],"chat_template_kwargs":{"enable_thinking":true}}'
 
@@ -131,6 +166,13 @@ check "emits <tool_call> wrapper" "$(has "$OUT" '<tool_call>')"
 check "emits <function=write_file>" "$(has "$OUT" '<function=write_file>')"
 check "emits <parameter=path>" "$(has "$OUT" '<parameter=path>')"
 check "emits <tool_response> for tool role" "$(has "$OUT" '<tool_response>')"
+
+echo "[AC #028: string-arguments history (OpenAI wire) still re-renders parameters]"
+render "$M_TOOLCALL_STRARGS"; OUT="$(cat "$POUT")"
+check "string-args tool_call returns HTTP 200" "$([ "$RCODE" = 200 ] && echo ok || echo no)"
+check "string-args emits <function=write_file>" "$(has "$OUT" '<function=write_file>')"
+check "string-args emits <parameter=path> (polyfill string->object)" "$(has "$OUT" '<parameter=path>')"
+check "string-args emits <parameter=content>" "$(has "$OUT" '<parameter=content>')"
 
 echo "[AC: enable_thinking kwargs honored]"
 render "$M_THINK_OFF"; OUT="$(cat "$POUT")"

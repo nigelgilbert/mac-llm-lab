@@ -55,6 +55,15 @@ REPEATS="${REPEATS:-2}"
 SAVE_DIR="${SAVE_DIR:-}"
 MODEL="${MODEL:-opencode}"
 
+# #029: REPEATS=0 would run an empty battery and print "RESULT: PASS (all 0
+# runs...)" — a vacuous PASS from the engine that callers treat as the #010
+# admission gate. The engine is the right home for the guard: REPEATS must be
+# a positive integer, always.
+if ! [[ "$REPEATS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: REPEATS must be a positive integer (got '${REPEATS}') — REPEATS=0 would vacuously PASS an empty battery (#029)" >&2
+  exit 1
+fi
+
 command -v python3 >/dev/null || { echo "ERROR: python3 required" >&2; exit 1; }
 [[ -z "$SAVE_DIR" ]] || mkdir -p "$SAVE_DIR"
 

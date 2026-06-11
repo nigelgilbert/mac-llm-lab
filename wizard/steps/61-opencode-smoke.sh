@@ -2,11 +2,16 @@
 # 61-opencode-smoke.sh — end-to-end smoke for the coding stack (#007). Two
 # assertions, both through the installed wrapper:
 #
-#   1. `oc probe` — the #001 deterministic injection oracle (wire capture:
-#      an in-container mock records the /v1/chat/completions body, which
-#      must contain "Instructions from: /root/.config/opencode/AGENTS.md").
-#      Model-independent; needs no llama-server. A fresh install must not
-#      ship a null prompt — injection failure is silent in OpenCode.
+#   1. `oc probe` — the deterministic injection oracle (#001, re-anchored on
+#      a SENTINEL by #014): oc appends a unique per-run sentinel line to the
+#      END of a probe copy of the global prompt, runs a trivial prompt
+#      through the normal container path against an in-container wire-capture
+#      mock, and PASSES iff the captured /v1/chat/completions body contains
+#      the sentinel. The old "Instructions from: /root/.config/opencode/
+#      AGENTS.md" attribution line is a secondary diagnostic only — an
+#      upstream rewording can never false-fail the gate. Model-independent;
+#      needs no llama-server. A fresh install must not ship a null prompt —
+#      injection failure is silent in OpenCode.
 #   2. `oc run` — a real trivial task against the tier server (full-local:
 #      the resident daemon; client-only: the LAN host via the rendered
 #      remote config + OC_SERVER_HOST), asserting the artifact lands in the

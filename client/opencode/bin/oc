@@ -44,6 +44,12 @@
 #                            boot/stop a remote server: red remote = exit 3.
 #   OC_KEEP_SERVER=1         leave an on-demand (tier 16/32) server running
 #                            after the session instead of stopping it
+#   OC_ALLOW_BROAD_WORKSPACE=1
+#                            override the workspace-root guard (#027): by
+#                            default oc REFUSES to mount $HOME, /, or any
+#                            filesystem root rw into the agent container
+#                            (container-first is only as strong as the mount).
+#                            Set this for the rare deliberate case.
 #
 # Exit codes:
 #   0   success (or `opencode`'s own exit code passed through)
@@ -197,8 +203,32 @@ stop_on_demand() {
   fi
 }
 
+# True for loopback spellings of OC_SERVER_HOST — the only hosts where a
+# config dialing host.docker.internal still reaches the same machine.
+server_host_is_local() {
+  case "$SERVER_HOST" in
+    127.*|localhost|::1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 assert_server() {
   if [[ "$SERVER_HOST" != "127.0.0.1" ]]; then
+    # Remote pairing check (#027): the health check below greens against the
+    # REMOTE, but the container dials whatever baseURL is in the mounted
+    # config. With a stock config that's host.docker.internal — i.e. the
+    # local Mac — so a green check would mask the agent talking to the wrong
+    # (possibly dead) server. The pairing requirement used to live only in
+    # the header comment; now it's enforced. Runs BEFORE the health probe so
+    # an unreachable OC_SERVER_HOST can't stall the failure.
+    if ! server_host_is_local && grep -q 'host\.docker\.internal' "$CONFIG_JSON"; then
+      die3 "OC_SERVER_HOST=$SERVER_HOST is remote, but the resolved config still dials host.docker.internal (the LOCAL Mac):
+  config: $CONFIG_JSON
+  The health check would green against the remote while the agent container
+  talks to the local host. Pair OC_SERVER_HOST with OPENCODE_CONFIG_JSON
+  pointing at a rendered remote config (opencode.remote*.json) whose baseURL
+  names the serving Mac."
+    fi
     green || die3 "remote server not green at http://$SERVER_HOST:$PORT/health
   oc cannot boot/lifecycle a remote server (OC_SERVER_HOST=$SERVER_HOST) —
   bring the tier daemon up on the serving Mac, then retry."
@@ -240,6 +270,37 @@ run_container() { # $@ = command inside the container; needs WORKSPACE + CONFIG_
   [[ -t 0 && -t 1 ]] || flags+=(-T)
   WORKSPACE="$INVOKE_PWD" OPENCODE_CONFIG_JSON="$CONFIG_JSON" \
     compose run "${flags[@]}" opencode "$@"
+}
+
+# Workspace-root guard (#027): oc mounts the workspace rw into the agent
+# container, so a habitual `oc` typed in $HOME would hand a weak-tier model rw
+# access to SSH keys, wizard state, everything — and `oc` in / hands it the
+# whole disk. Refuse $HOME, /, and any filesystem root (mount point: device
+# number differs from its parent's — catches /Volumes/X, /System/Volumes/Data,
+# network mounts). OC_ALLOW_BROAD_WORKSPACE=1 overrides for the rare
+# deliberate case. Everything else keeps note_workspace's non-git warning.
+assert_workspace() {
+  local ws home_resolved reason=""
+  # Physical resolution: a symlink into $HOME must not dodge the guard.
+  ws="$(cd -P "$INVOKE_PWD" && pwd)"
+  home_resolved="$(cd -P "$HOME" && pwd)"
+  if [[ "$ws" == "/" ]]; then
+    reason="the filesystem root (/)"
+  elif [[ "$ws" == "$home_resolved" ]]; then
+    reason="your home directory (\$HOME)"
+  elif [[ "$(stat -f %d "$ws" 2>/dev/null || stat -c %d "$ws" 2>/dev/null)" \
+       != "$(stat -f %d "$ws/.." 2>/dev/null || stat -c %d "$ws/.." 2>/dev/null)" ]]; then
+    reason="a filesystem root (mount point)"
+  fi
+  [[ -z "$reason" ]] && return 0
+  if [[ "${OC_ALLOW_BROAD_WORKSPACE:-0}" == 1 ]]; then
+    echo "oc: WARNING: mounting $ws rw into the agent container ($reason) — OC_ALLOW_BROAD_WORKSPACE=1 override active" >&2
+    return 0
+  fi
+  die "refusing to mount $ws as the agent workspace: it is $reason.
+  The agent container gets read-write access to everything under the
+  workspace mount. cd into a project directory first, or set
+  OC_ALLOW_BROAD_WORKSPACE=1 if you really mean it."
 }
 
 note_workspace() {
@@ -299,8 +360,16 @@ EOF
   cat > "$ws/_mock.js" <<'EOF'
 // Minimal OpenAI-compatible capture endpoint (in-container 127.0.0.1 —
 // sidesteps the macOS-firewall problem that kills host-side mocks, see #001).
+// argv[2] = optional listen delay in ms (test knob, see OC_PROBE_MOCK_DELAY_MS
+// in cmd_probe — simulates slow node startup to exercise the readiness poll).
 const http = require('http'), fs = require('fs');
-http.createServer((req, res) => {
+const delayMs = Number(process.argv[2] || 0);
+const server = http.createServer((req, res) => {
+  if (req.url === '/health') {
+    // Readiness-poll target (#027): answered without touching the capture
+    // file, so polling can never make _capture.jsonl spuriously non-empty.
+    res.writeHead(200); res.end('ok'); return;
+  }
   let body = '';
   req.on('data', c => body += c);
   req.on('end', () => {
@@ -310,7 +379,8 @@ http.createServer((req, res) => {
       choices: [{index: 0, message: {role: 'assistant', content: 'ok'}, finish_reason: 'stop'}],
       usage: {prompt_tokens: 1, completion_tokens: 1, total_tokens: 2}}));
   });
-}).listen(9099, '127.0.0.1');
+});
+setTimeout(() => server.listen(9099, '127.0.0.1'), delayMs);
 EOF
   # Probe prompt = byte-identical copy of the resolved prompt + a unique
   # sentinel appended as the LAST line (#014). Same mount path, same injection
@@ -326,9 +396,29 @@ EOF
   # Drive it through the standard container path: same compose service, same
   # AGENTS.md mount target — only $PWD, the config and the prompt copy are
   # swapped in for the mock.
+  #
+  # Mock readiness is POLLED, not slept past (#027): the old fixed `sleep 1`
+  # raced node's startup — a slow cold start meant OpenCode dialed a port
+  # nobody was listening on yet and the probe false-FAILed. Bounded curl loop
+  # against the mock's no-capture /health route instead (100 × 0.2s = 20s
+  # ceiling, then loud exit). OC_PROBE_MOCK_DELAY_MS (host env, test-only)
+  # injects an artificial listen delay to exercise exactly that race.
+  local mock_delay="${OC_PROBE_MOCK_DELAY_MS:-0}"
+  [[ "$mock_delay" =~ ^[0-9]+$ ]] || die "OC_PROBE_MOCK_DELAY_MS must be a non-negative integer (got: $mock_delay)"
   local saved_pwd="$INVOKE_PWD" saved_cfg="${CONFIG_JSON:-}" saved_prompt="$PROMPT_FILE"
   INVOKE_PWD="$ws" CONFIG_JSON="$cfg" PROMPT_FILE="$probe_prompt" run_container \
-    sh -c 'node /workspace/_mock.js & sleep 1; timeout 90 opencode run -- "say hi" >/dev/null 2>&1; true' || true
+    sh -c "node /workspace/_mock.js $mock_delay &
+      i=0
+      until curl -fsS -o /dev/null http://127.0.0.1:9099/health 2>/dev/null; do
+        i=\$((i+1))
+        if [ \"\$i\" -ge 100 ]; then
+          echo 'oc probe: capture mock never came up on 127.0.0.1:9099 within 20s' >&2
+          exit 9
+        fi
+        sleep 0.2
+      done
+      timeout 90 opencode run -- 'say hi' >/dev/null 2>&1
+      true" || true
   INVOKE_PWD="$saved_pwd"; CONFIG_JSON="$saved_cfg"; PROMPT_FILE="$saved_prompt"
   if [[ -s "$ws/_capture.jsonl" ]] && grep -q "$sentinel" "$ws/_capture.jsonl"; then
     echo "oc: probe PASS — captured request body contains the planted prompt sentinel ($sentinel)"
@@ -354,6 +444,7 @@ case "$SUBCMD" in
 esac
 
 # --- the daily-driver paths: bare `oc` (TUI) and `oc run` ---------------------
+assert_workspace
 assert_prompt
 assert_config
 assert_server

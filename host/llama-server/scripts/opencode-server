@@ -122,6 +122,51 @@ eval "PRESENCE_PENALTY=\"\$TIER_${TIER}_PRESENCE_PENALTY\""
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
+# --- per-tier lifecycle lock (#029) -----------------------------------------
+# Two concurrent `start`s (plausible: `oc -t 16` and the sweep driver both
+# auto-boot on-demand tiers) can both pass the pidfile+lsof preflight; the
+# loser then clobbers the winner's pidfile, leaving the live server
+# unmanageable. Serialize every MUTATING lifecycle command (start/stop/
+# restart/install/uninstall — status/health/probe stay lock-free) behind the
+# same atomic mkdir-lock pattern proven in rotate-opencode-server-log.sh (G3),
+# extended with an owner-pid record so a crashed invocation's lock can be
+# reclaimed instead of wedging the tier forever.
+LIFECYCLE_LOCK="${OPENCODE_LLAMA_LOCK_DIR:-${OPENCODE_LOG_BASE}${TAG}.lifecycle.lock.d}"
+_LIFECYCLE_LOCK_HELD=0
+release_lifecycle_lock() {
+  if [[ "$_LIFECYCLE_LOCK_HELD" == 1 ]]; then
+    rm -f "$LIFECYCLE_LOCK/pid"; rmdir "$LIFECYCLE_LOCK" 2>/dev/null || true
+    _LIFECYCLE_LOCK_HELD=0
+  fi
+  return 0
+}
+acquire_lifecycle_lock() {
+  local attempt owner mt age
+  for attempt in 1 2; do
+    if mkdir "$LIFECYCLE_LOCK" 2>/dev/null; then
+      echo $$ > "$LIFECYCLE_LOCK/pid"
+      _LIFECYCLE_LOCK_HELD=1
+      trap release_lifecycle_lock EXIT
+      return 0
+    fi
+    owner="$(cat "$LIFECYCLE_LOCK/pid" 2>/dev/null || true)"
+    if [[ "$owner" =~ ^[0-9]+$ ]]; then
+      kill -0 "$owner" 2>/dev/null && break   # live owner — genuine contention
+      echo "  reclaiming stale lifecycle lock (owner pid $owner is gone): $LIFECYCLE_LOCK" >&2
+    else
+      # No owner recorded: either a holder inside the µs mkdir→pid-write
+      # window, or a crash exactly there. Only reclaim a demonstrably old
+      # (>60 s) lock — never a freshly created one.
+      mt="$(stat -f %m "$LIFECYCLE_LOCK" 2>/dev/null || echo 0)"
+      age=$(( $(date +%s) - mt ))
+      [[ "$age" -gt 60 ]] || break
+      echo "  reclaiming abandoned lifecycle lock (no owner recorded, ${age}s old): $LIFECYCLE_LOCK" >&2
+    fi
+    rm -f "$LIFECYCLE_LOCK/pid"; rmdir "$LIFECYCLE_LOCK" 2>/dev/null || true
+  done
+  die "another opencode-server lifecycle operation is in progress for tier-$TIER (lock $LIFECYCLE_LOCK, held by pid ${owner:-unknown}) — wait for it to finish, then retry (status/health/probe need no lock)"
+}
+
 preflight() {
   [[ -x "$BINARY" ]] || die "llama-server not found/executable: $BINARY"
   [[ -f "$GGUF"   ]] || die "tier-${TIER} GGUF not found: $GGUF (see models.conf)"
@@ -134,10 +179,24 @@ preflight() {
 http_code() { curl -s -o /dev/null -w '%{http_code}' "$1" 2>/dev/null || echo 000; }
 is_green()  { [[ "$(http_code "$BASE/health")" == 200 ]]; }
 
+# running_pid — print the pidfile's PID iff it is live AND identity-verified.
+# kill -0 alone trusts a recycled PID (#029): `start` would falsely report
+# "already running" and — worse — `stop` would SIGTERM-then-SIGKILL an
+# innocent process. The live PID must still be OUR binary serving OUR port
+# (`ps -o command=` carries the full argv we booted with); anything else is a
+# stale pidfile: remove it, never signal that process.
 running_pid() {
   [[ -f "$PIDFILE" ]] || return 1
-  local pid; pid="$(cat "$PIDFILE" 2>/dev/null || true)"
-  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && { echo "$pid"; return 0; }
+  local pid cmd
+  pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+  [[ "$pid" =~ ^[0-9]+$ ]] || { rm -f "$PIDFILE"; return 1; }
+  kill -0 "$pid" 2>/dev/null || return 1
+  cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  if [[ "$cmd" == *"$BINARY"* ]] && [[ "$cmd" =~ --port[[:space:]]+${PORT}([[:space:]]|$) ]]; then
+    echo "$pid"; return 0
+  fi
+  echo "stale pidfile: $PIDFILE pid $pid is NOT our llama-server on :$PORT (command: ${cmd:-?}) — removing pidfile, leaving that process untouched" >&2
+  rm -f "$PIDFILE"
   return 1
 }
 
@@ -330,6 +389,40 @@ cmd_probe() {
   echo "probe: all checks passed (tier-$TIER, $BASE)"
 }
 
+# render_plist SRC DEST — fill the launchd plist template's placeholders from
+# the resolved tier config. Replaces the old sed pipeline (#029): sed's
+# `s|__GGUF_PATH__|$GGUF|g` corrupted the rendered plist whenever a
+# models.conf path contained `|` (delimiter) or `&` (whole-match
+# metacharacter), and `&`/`<` additionally need XML escaping to keep the
+# plist valid. Python substitutes literally and XML-escapes every value, so
+# the path that launchd parses back out is byte-for-byte the configured one.
+render_plist() {
+  local abs_template
+  abs_template="$(cd "$(dirname "$TEMPLATE")" && pwd)/$(basename "$TEMPLATE")"
+  PLIST_SRC="$1" PLIST_OUT="$2" \
+  R_BINARY="$BINARY" R_GGUF="$GGUF" R_TEMPLATE="$abs_template" R_CTX="$CTX" \
+  R_BATCH="$BATCH" R_NPREDICT="$NPREDICT" R_TEMP="$TEMP" R_TOP_P="$TOP_P" \
+  R_TOP_K="$TOP_K" R_REPEAT_PENALTY="$REPEAT_PENALTY" \
+  R_PRESENCE_PENALTY="$PRESENCE_PENALTY" \
+  python3 - <<'PY'
+import os
+from xml.sax.saxutils import escape
+mapping = {
+    "__BINARY__": "R_BINARY", "__GGUF_PATH__": "R_GGUF",
+    "__TEMPLATE_PATH__": "R_TEMPLATE", "__CTX_SIZE__": "R_CTX",
+    "__BATCH_SIZE__": "R_BATCH", "__NPREDICT__": "R_NPREDICT",
+    "__TEMP__": "R_TEMP", "__TOP_P__": "R_TOP_P", "__TOP_K__": "R_TOP_K",
+    "__REPEAT_PENALTY__": "R_REPEAT_PENALTY",
+    "__PRESENCE_PENALTY__": "R_PRESENCE_PENALTY",
+}
+src = open(os.environ["PLIST_SRC"]).read()
+for placeholder, env in mapping.items():
+    src = src.replace(placeholder, escape(os.environ[env]))
+with open(os.environ["PLIST_OUT"], "w") as f:
+    f.write(src)
+PY
+}
+
 # --- launchd path (login-persistent; tier-64 = the resident daily daemon) ---
 cmd_install() {
   # Render/poll parity (#005 defect 4): the plist templates hardcode each
@@ -360,19 +453,8 @@ cmd_install() {
     die "port $PORT still in use by a foreign process (refusing — never touches claw :11435)"
   fi
   mkdir -p "$HOME/Library/LaunchAgents"
-  sed \
-    -e "s|__BINARY__|$BINARY|g" \
-    -e "s|__GGUF_PATH__|$GGUF|g" \
-    -e "s|__TEMPLATE_PATH__|$(cd "$(dirname "$TEMPLATE")" && pwd)/$(basename "$TEMPLATE")|g" \
-    -e "s|__CTX_SIZE__|$CTX|g" \
-    -e "s|__BATCH_SIZE__|$BATCH|g" \
-    -e "s|__NPREDICT__|$NPREDICT|g" \
-    -e "s|__TEMP__|$TEMP|g" \
-    -e "s|__TOP_P__|$TOP_P|g" \
-    -e "s|__TOP_K__|$TOP_K|g" \
-    -e "s|__REPEAT_PENALTY__|$REPEAT_PENALTY|g" \
-    -e "s|__PRESENCE_PENALTY__|$PRESENCE_PENALTY|g" \
-    "$PLIST_TEMPLATE" > "$PLIST_DEST"
+  render_plist "$PLIST_TEMPLATE" "$PLIST_DEST" || die "plist render failed ($PLIST_TEMPLATE -> $PLIST_DEST)"
+  plutil -lint "$PLIST_DEST" >/dev/null || die "rendered plist failed plutil -lint: $PLIST_DEST"
   launchctl bootstrap "gui/$(id -u)" "$PLIST_DEST"
   echo "bootstrapped: $LABEL on :$PORT ($PLIST_DEST)"
   echo "  waiting for green /health (model load; tier-64 ≈ 21 GB resident — see header memory budget)"
@@ -400,14 +482,21 @@ cmd_uninstall() {
   echo "uninstalled: $LABEL (plist removed: $PLIST_DEST)"
 }
 
+# When sourced (render/identity unit tests), expose config + functions only —
+# never dispatch a command.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then return 0 2>/dev/null || true; fi
+
+# Mutating commands take the per-tier lifecycle lock (#029); held for the whole
+# invocation, released on EXIT. install/restart reach cmd_stop/cmd_start as
+# plain functions, so there is exactly one acquisition per invocation.
 case "${1:-}" in
-  start)     cmd_start ;;
-  stop)      cmd_stop ;;
-  restart)   cmd_stop; cmd_start ;;
+  start)     acquire_lifecycle_lock; cmd_start ;;
+  stop)      acquire_lifecycle_lock; cmd_stop ;;
+  restart)   acquire_lifecycle_lock; cmd_stop; cmd_start ;;
   status)    cmd_status ;;
   health)    cmd_health ;;
   probe)     cmd_probe ;;
-  install)   cmd_install ;;
-  uninstall) cmd_uninstall ;;
+  install)   acquire_lifecycle_lock; cmd_install ;;
+  uninstall) acquire_lifecycle_lock; cmd_uninstall ;;
   *) echo "usage: $(basename "$0") {start|stop|restart|status|health|probe|install|uninstall}" >&2; exit 1 ;;
 esac

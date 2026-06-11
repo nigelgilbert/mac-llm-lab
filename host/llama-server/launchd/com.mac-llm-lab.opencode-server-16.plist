@@ -14,7 +14,7 @@
       interface is the direct-boot control script:
           OPENCODE_TIER=16 ./host/llama-server/scripts/opencode-server {start|stop|status|health|probe}
       Render + bootstrap this plist with:
-          OPENCODE_TIER=16 ./host/llama-server/scripts/opencode-server install   (sed-fills placeholders)
+          OPENCODE_TIER=16 ./host/llama-server/scripts/opencode-server install   (fills placeholders, XML-escaped — #029)
       Do NOT install by hand — placeholders are filled from models.conf tier-16.
 
       Distinct from the production claw plist AND the tier-64 OpenCode plist:
@@ -99,11 +99,23 @@
         <string>--metrics</string>
     </array>
 
-    <!-- Auto-start at login and revive on crash. -->
+    <!-- Auto-start at login; revive on crash or unsuccessful exit (#029).
+         The old unconditional KeepAlive=true + ThrottleInterval=10 made a
+         stale GGUF path respawn a multi-GB load attempt every ~10 s forever
+         into an unrotated /tmp log. Conditional KeepAlive restarts only
+         after a crash (signal) or a non-zero exit — never after a clean
+         exit — and ThrottleInterval=60 caps a config-broken daemon at one
+         attempt per minute. Recover: fix models.conf, then re-run
+         `OPENCODE_TIER=16 opencode-server install`. -->
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
 
     <!-- Own log path — never clobbers claw's or opencode-64's log. -->
     <key>StandardOutPath</key>
@@ -111,8 +123,8 @@
     <key>StandardErrorPath</key>
     <string>/tmp/opencode-llama-server-16.log</string>
 
-    <!-- Crash backoff, in case the binary dies on bad config. -->
+    <!-- Respawn backoff (#029): at most one restart attempt per 60 s. -->
     <key>ThrottleInterval</key>
-    <integer>10</integer>
+    <integer>60</integer>
 </dict>
 </plist>

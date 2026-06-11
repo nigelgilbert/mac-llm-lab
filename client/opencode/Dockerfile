@@ -14,6 +14,13 @@ FROM debian:bookworm-slim
 #   docker build --build-arg OPENCODE_VERSION=1.16.2 -t opencode:local .
 ARG OPENCODE_VERSION=1.16.2
 
+# Pinned Node MAJOR (#027). Nodesource's setup_lts.x is a moving target — the
+# LTS line silently advances under the same Dockerfile, undercutting the
+# OPENCODE_VERSION reproducibility rationale above. Pin the major (24 = what
+# the image actually shipped before the pin) and assert it post-install so a
+# Nodesource-side surprise fails the build instead of shipping.
+ARG NODE_MAJOR=24
+
 # Runtime deps mirror claw-code's slim stage, minus the claw-specific bits:
 #   ca-certificates, curl, git, nodejs  -> kept (same conventions as claw-code)
 #   libssl3  -> dropped from the explicit list: claw installs it for its
@@ -28,8 +35,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         git \
-    && curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
+    && curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && apt-get install -y nodejs \
+    # Assert the pinned major actually landed (Nodesource script regression guard).
+    && node --version | grep -q "^v${NODE_MAJOR}\." \
     && npm install -g "opencode-ai@${OPENCODE_VERSION}" \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/* \

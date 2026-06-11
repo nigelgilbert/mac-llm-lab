@@ -11,8 +11,9 @@
       decision §2.5 / issue #002 — the role claw's :11435 plays today).
 
       Render + bootstrap this plist with:
-          ./host/llama-server/scripts/opencode-server install   (sed-fills placeholders,
-                                                                 then waits for green /health)
+          ./host/llama-server/scripts/opencode-server install   (fills placeholders with
+                                                                 XML escaping — #029 — then
+                                                                 waits for green /health)
       Do NOT install by hand — placeholders are filled from models.conf tier-64.
       The direct-boot script path ({start|stop|status|health|probe}) remains for
       ad-hoc/phase-swap use; on-demand tiers 16/32 use it exclusively.
@@ -104,11 +105,23 @@
         <string>--metrics</string>
     </array>
 
-    <!-- Auto-start at login and revive on crash. -->
+    <!-- Auto-start at login; revive on crash or unsuccessful exit (#029).
+         The old unconditional KeepAlive=true + ThrottleInterval=10 made a
+         stale GGUF path respawn a ~21 GB load attempt every ~10 s forever
+         into an unrotated /tmp log. Conditional KeepAlive restarts only
+         after a crash (signal) or a non-zero exit — never after a clean
+         exit — and ThrottleInterval=60 caps a config-broken daemon at one
+         attempt per minute. Recover: fix models.conf, then re-run
+         `opencode-server install`. -->
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
 
     <!-- Own log path — never clobbers claw's /tmp/llama-server.log. -->
     <key>StandardOutPath</key>
@@ -116,8 +129,8 @@
     <key>StandardErrorPath</key>
     <string>/tmp/opencode-llama-server.log</string>
 
-    <!-- Crash backoff, in case the binary dies on bad config. -->
+    <!-- Respawn backoff (#029): at most one restart attempt per 60 s. -->
     <key>ThrottleInterval</key>
-    <integer>10</integer>
+    <integer>60</integer>
 </dict>
 </plist>
