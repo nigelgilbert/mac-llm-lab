@@ -89,6 +89,41 @@
 # end-of-sweep trap uses the same filter, so containers from other sweeps or
 # manual runs (no/other label) are never touched.
 #
+# ── Workspace mount flake mitigation (#019) ─────────────────────────────────
+# Under co-resident load OrbStack's file-share can serve a STALE handle for
+# the /workspace bind: `[ -d /workspace ]` passes, but the first real write
+# dies with an instant `ENOENT ... '/workspace/<seed-file>'` inside runAgent's
+# workspace reset/seed (observed on ~30-50% of sweeps during the PR #6
+# campaign; same share-degradation family as the virtiofs log freeze — the
+# log side is mitigated by the #007 capture ladder, this is the remaining
+# manifestation). Two layers, both inside the eval-runner's `sh -c`:
+#   1. Write-probe canary (runner preflight): touch + read-back + rm of a
+#      sentinel THROUGH the mount, 3 tries with a 2s settle between them. A
+#      dead mount fails the ARM fast with the canary's message — never deep
+#      inside a cell.
+#   2. Signature-gated cell retry (cell loop): a cell that dies with the
+#      flake signature — nonzero rc that is NOT the per-cell cap (124/137),
+#      within 20s of cell start (seed ENOENT is instant; the slimmest real
+#      cell runs an agent loop for minutes), node output carrying an
+#      `ENOENT ... /workspace` line, AND no fresh registry row — is re-run
+#      ONCE behind a loud `>>> cell <stem> RETRY (workspace mount flake)`
+#      marker. Genuine failures (assertions, timeouts, anything without the
+#      FULL signature) are NEVER retried; a flake-shaped failure that DID
+#      emit a row is not retried either (a second attempt would over-emit
+#      the cell and fail the #003 audit — the row-count gate closes the
+#      duplicate-emission window, so a successful retry yields exactly one
+#      row and the expected-attempts audit stays exact). The retried-cell
+#      count is surfaced on the arm summary line (`retried_cells=N`).
+# TEST-ONLY fault injection (deterministic exercise of both branches):
+#   OC_WS_FAULT_RO=1            bind /workspace read-only → the canary must
+#                               fail the arm in preflight (no cell starts)
+#   OC_FLAKE_INJECT=<stem>      replace the FIRST attempt of <stem> (once per
+#                               arm) with a flake-shaped failure (instant
+#                               real node ENOENT under /workspace) → the
+#                               retry must fire and the retry must succeed
+#   OC_FLAKE_INJECT_GENUINE=<stem>  replace every attempt of <stem> with a
+#                               fast NON-signature failure → must NOT retry
+#
 # ── Knobs (env) ─────────────────────────────────────────────────────────────
 #   SMOKE_TESTS        space-separated tier-eval test_id stems   (default: deep-equal)
 #   CONFIG_AB_REPEATS  runs per cell per arm (→ N per bucket)    (default: 1)
@@ -99,6 +134,9 @@
 #   REUSE_ROWS         1 = append to existing REGISTRY_OUT       (default: 0)
 #   REGISTRY_OUT       explicit shared-registry path             (default: auto-timestamped)
 #   RUNNER_IMAGE       baked eval-runner image (#009)            (default: mac-llm-lab-eval-runner:local)
+#   OC_WS_FAULT_RO / OC_FLAKE_INJECT / OC_FLAKE_INJECT_GENUINE
+#              #019 TEST-ONLY fault injection — see the workspace-mount-flake
+#              section above; never set on a real sweep
 #   OC_ROTATE_HOLDING_LOCK  1 = the invoker already holds /tmp/oc-resident.lock.d
 #              (canonical sweep protocol) — lets the #015 rotation preflight's
 #              G3 lock guard pass; without it a held lock makes the preflight
@@ -335,6 +373,13 @@ docker run --rm -v "$REPO_DIR:$REPO_DIR" -w "$REPO_DIR/host/test" \
   --filter "$SMOKE_TESTS" --out "$PLAN_CSV" \
   || err "expected-attempts plan failed (see message above)"
 
+# Retried-cell handoff (#019): the cell loop runs inside the eval-runner, so
+# its retry counter crosses back to the driver through this per-sweep file on
+# the path-matched runtime root (container-written, host-read — the safe
+# direction under the OrbStack freeze; host reads are truth). Read + removed
+# after each arm for the `retried_cells=N` arm summary field.
+RETRY_COUNT_FILE="$CLAW_RT_DIR/.retry-count.${OC_SWEEP_ID}"
+
 # Fresh-row watermark (#003): the registry's line count BEFORE this sweep
 # appends anything. The post-gate diff passes it as --since-line so under
 # REUSE_ROWS=1 only THIS sweep's rows are audited against the plan (pre-
@@ -368,6 +413,11 @@ cleanup() {
   fi
   if [ -n "${ARM_STAMP:-}" ]; then
     rm -f "$ARM_STAMP" 2>/dev/null || true
+  fi
+  # #019: the per-arm read removes this on the normal path; backstop for a
+  # sweep dying mid-arm so no stale handoff file lingers in the runtime root.
+  if [ -n "${RETRY_COUNT_FILE:-}" ]; then
+    rm -f "$RETRY_COUNT_FILE" 2>/dev/null || true
   fi
 
   # Reap any sibling run containers THIS sweep may have orphaned (a wedged
@@ -628,11 +678,23 @@ post_arm_capture_pass() {
 # `rm -rf "$H" && mkdir` it: churning H's inode right before bind-mounting it can
 # leave OrbStack's file-share with a stale handle, so /workspace shows up EMPTY
 # or ABSENT in the sibling and every cell false-fails at workspace.reset() with a
-# cryptic `mkdir '/workspace'` ENOENT (observed once under co-resident load). Keep
-# the dir, drop only its contents; workspace.reset() clears per-cell anyway.
+# cryptic `mkdir '/workspace'` ENOENT (observed repeatedly under co-resident
+# load — the #019 flake family). Keep the dir, drop only its contents;
+# workspace.reset() clears per-cell anyway. The residual flake (stale handle
+# despite the stable inode) is handled by the #019 canary + retry layers in
+# the runner sh -c below.
 mkdir -p "$H"
 find "$H" -mindepth 1 -exec rm -rf {} + 2>/dev/null || true
 log "    shared workspace H = $H"
+
+# #019 AC1 injection (TEST-ONLY): bind /workspace read-only so the write-probe
+# canary must fail the arm in preflight — the bare [ -d ] check it replaced
+# passed on exactly this present-but-unusable mount shape.
+WS_RO_SUFFIX=""
+if [ "${OC_WS_FAULT_RO:-0}" = 1 ]; then
+  WS_RO_SUFFIX=":ro"
+  log "    #019 INJECT: /workspace bound READ-ONLY (OC_WS_FAULT_RO=1) — the arm must die in the canary preflight"
+fi
 
 # ============================================================================
 # Arm sub-phases: one per ARMS entry, all appending to the same registry
@@ -665,13 +727,20 @@ if [ -n "$TIMINGS_INDEX" ]; then
   touch "$ARM_STAMP"
   start_timings_ticker
 fi
+# #019: no stale handoff — the arm writes this file at cell-loop end; a
+# leftover from a previous arm (or a wedged run) must not be read as this
+# arm's count.
+rm -f "$RETRY_COUNT_FILE"
 set +e
 docker run --rm \
   -v "$REPO_DIR:$REPO_DIR" -w "$REPO_DIR/host/test" \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -v "$H:/workspace" \
+  -v "$H:/workspace$WS_RO_SUFFIX" \
   -e CONFIG="$ARM" \
   -e HOST_WORKSPACE="$H" \
+  -e OC_RETRY_COUNT_FILE="$RETRY_COUNT_FILE" \
+  -e OC_FLAKE_INJECT="${OC_FLAKE_INJECT:-}" \
+  -e OC_FLAKE_INJECT_GENUINE="${OC_FLAKE_INJECT_GENUINE:-}" \
   -e TIER="$TIER" \
   -e OPENCODE_CONFIG_JSON="$OC_CONFIG_JSON" \
   -e OC_SWEEP_ID="$OC_SWEEP_ID" \
@@ -695,43 +764,134 @@ docker run --rm \
     done
     docker compose version >/dev/null 2>&1 \
       || { echo "FATAL: docker compose plugin missing from runner image — rebuild it: (cd host/test && docker compose build runner)" >&2; exit 3; }
-    # Fail fast + loud if the shared workspace bind mount did not land — otherwise
-    # every cell false-fails deep inside reset() with a cryptic ENOENT. A green
-    # here means HOST_WORKSPACE crossed the container boundary (mount contract).
-    if [ ! -d /workspace ]; then
-      echo "FATAL: /workspace not visible in sibling (HOST_WORKSPACE=$HOST_WORKSPACE) — OrbStack share/mount issue; aborting before false-failing every cell." >&2
+    # Write-probe canary (#019, replacing the bare [ -d /workspace ] check): a
+    # stale OrbStack share can serve /workspace as present-but-dead — the -d
+    # test passes, then the first real write inside a cell dies with an
+    # instant seed-phase ENOENT. Probe the mount for REAL (touch + read-back
+    # + rm of a sentinel) with a short bounded settle (3 tries, 2s apart) and
+    # fail the ARM here, pre-cell, when the mount is dead. A green canary
+    # means HOST_WORKSPACE crossed the container boundary AND the share
+    # round-trips bytes (mount contract).
+    ws_try=1
+    ws_ok=0
+    while [ "$ws_try" -le 3 ]; do
+      if [ -d /workspace ] \
+         && printf canary > /workspace/.oc-ws-canary 2>/dev/null \
+         && [ "$(cat /workspace/.oc-ws-canary 2>/dev/null)" = "canary" ] \
+         && rm /workspace/.oc-ws-canary 2>/dev/null; then
+        ws_ok=1
+        break
+      fi
+      rm -f /workspace/.oc-ws-canary 2>/dev/null
+      if [ "$ws_try" -lt 3 ]; then
+        echo ">>> /workspace write-probe canary attempt $ws_try failed — settling 2s and retrying (#019)"
+        sleep 2
+      fi
+      ws_try=$((ws_try + 1))
+    done
+    if [ "$ws_ok" -ne 1 ]; then
+      echo "FATAL: /workspace write-probe canary failed after 3 attempts (HOST_WORKSPACE=$HOST_WORKSPACE): touch + read-back + rm of /workspace/.oc-ws-canary did not survive the mount — OrbStack share/mount is dead or stale (a bare -d test can still pass on it); aborting the arm before any cell false-fails with a deep seed ENOENT (#019)." >&2
       exit 4
     fi
-    rc=0
-    for stem in $TIER_EVAL_FILTER; do
-      echo ">>> $CONFIG cell: $stem (cap ${PER_TEST_TIMEOUT}s)"
+
+    # #019: one cell attempt. $2 selects the TEST-ONLY injection: "flake" =
+    # instant real node ENOENT under /workspace (same shape the OrbStack
+    # share serves), "genuine" = fast failure WITHOUT the signature, "" =
+    # the real cell. The caller merges stderr into the captured stream so
+    # the signature is detected on either stream.
+    run_attempt() {
+      if [ "$2" = "flake" ]; then
+        echo ">>> #019 INJECT: replacing this attempt of $1 with a flake-shaped failure (OC_FLAKE_INJECT)"
+        node -e "require(\"fs\").readFileSync(\"/workspace/__oc-flake-inject__/seed-file\")"
+        return $?
+      fi
+      if [ "$2" = "genuine" ]; then
+        echo ">>> #019 INJECT: replacing this attempt of $1 with a genuine (non-signature) failure (OC_FLAKE_INJECT_GENUINE)"
+        node -e "console.log(\"AssertionError [ERR_ASSERTION]: injected genuine failure (#019 test hook)\"); process.exit(1)"
+        return $?
+      fi
       timeout --signal=TERM --kill-after=20s "${PER_TEST_TIMEOUT}s" \
         node --test --test-concurrency=1 \
           --test-reporter=spec --test-reporter-destination=stdout \
           --test-reporter=./lib/registry-reporter.js --test-reporter-destination=stdout \
-          "__tests__/tier-eval/${stem}.test.js"
-      cell=$?
-      if [ "$cell" -eq 124 ] || [ "$cell" -eq 137 ]; then
-        # Per-cell cap fired (124 = TERM, 137 = the --kill-after KILL). The
-        # killed node chain has no SIGTERM handler, so the reporter flush
-        # never ran: NO row was emitted for this cell (the end-of-sweep
-        # expected-attempts diff names it, #003) — and the oc-run-* sibling
-        # SURVIVES the kill, parked on the tier llama-server slot. Reap the
-        # containers of THIS sweep now (#004; label mac-llm-lab.sweep=$OC_SWEEP_ID
-        # — only one cell is ever in flight, so sweep scope == cell scope).
-        reaped=$(docker ps -a --filter "label=mac-llm-lab.sweep=$OC_SWEEP_ID" --format "{{.Names}}" | tr "\n" " ")
-        if [ -n "$reaped" ]; then
-          docker rm -f $(docker ps -aq --filter "label=mac-llm-lab.sweep=$OC_SWEEP_ID") >/dev/null 2>&1
-          echo ">>> cell $stem KILLED by per-cell cap (rc=$cell): NO row emitted (reporter flush never ran); reaped sweep container(s): $reaped"
-        else
-          echo ">>> cell $stem KILLED by per-cell cap (rc=$cell): NO row emitted (reporter flush never ran); no sweep-labeled container left to reap"
+          "__tests__/tier-eval/$1.test.js"
+    }
+
+    # #019: fresh-row probe for the duplicate-emission gate. The registry is
+    # appended by THIS container (registry-reporter in the cell node process),
+    # so its own read-back is coherent — no cross-boundary freeze hazard.
+    reg_count() {
+      if [ -f "$RUN_REGISTRY_PATH" ]; then wc -l < "$RUN_REGISTRY_PATH"; else echo 0; fi
+    }
+
+    rc=0
+    retried=0
+    flake_injected=0
+    exec 3>&1
+    for stem in $TIER_EVAL_FILTER; do
+      attempt=1
+      while :; do
+        echo ">>> $CONFIG cell: $stem (cap ${PER_TEST_TIMEOUT}s)"
+        inject=""
+        if [ -n "${OC_FLAKE_INJECT:-}" ] && [ "$stem" = "${OC_FLAKE_INJECT:-}" ] && [ "$attempt" -eq 1 ] && [ "$flake_injected" -eq 0 ]; then
+          inject=flake
+          flake_injected=1
+        elif [ -n "${OC_FLAKE_INJECT_GENUINE:-}" ] && [ "$stem" = "${OC_FLAKE_INJECT_GENUINE:-}" ]; then
+          inject=genuine
         fi
-        rc=1
-      elif [ "$cell" -ne 0 ]; then
-        echo ">>> cell $stem rc=$cell (cell failed; a row was emitted iff runAgent reached the reporter flush — the end-of-sweep expected-attempts diff audits it); continuing"
-        rc=1
-      fi
+        reg_before=$(reg_count)
+        t0=$(date +%s)
+        # Stream the attempt live (tee → fd3 = real stdout) while capturing it
+        # for the signature grep; the attempt rc rides fd4 out of the pipeline
+        # (POSIX — busybox ash has no PIPESTATUS). stderr is merged into the
+        # captured stream so a flake ENOENT is caught wherever node prints it.
+        cell=$({ { run_attempt "$stem" "$inject" 2>&1; echo $? >&4; } | tee /tmp/oc-cell-out.txt >&3; } 4>&1)
+        elapsed=$(( $(date +%s) - t0 ))
+        if [ "$cell" -eq 124 ] || [ "$cell" -eq 137 ]; then
+          # Per-cell cap fired (124 = TERM, 137 = the --kill-after KILL). The
+          # killed node chain has no SIGTERM handler, so the reporter flush
+          # never ran: NO row was emitted for this cell (the end-of-sweep
+          # expected-attempts diff names it, #003) — and the oc-run-* sibling
+          # SURVIVES the kill, parked on the tier llama-server slot. Reap the
+          # containers of THIS sweep now (#004; label mac-llm-lab.sweep=$OC_SWEEP_ID
+          # — only one cell is ever in flight, so sweep scope == cell scope).
+          # NEVER retried (#019): a timeout is not the flake signature.
+          reaped=$(docker ps -a --filter "label=mac-llm-lab.sweep=$OC_SWEEP_ID" --format "{{.Names}}" | tr "\n" " ")
+          if [ -n "$reaped" ]; then
+            docker rm -f $(docker ps -aq --filter "label=mac-llm-lab.sweep=$OC_SWEEP_ID") >/dev/null 2>&1
+            echo ">>> cell $stem KILLED by per-cell cap (rc=$cell): NO row emitted (reporter flush never ran); reaped sweep container(s): $reaped"
+          else
+            echo ">>> cell $stem KILLED by per-cell cap (rc=$cell): NO row emitted (reporter flush never ran); no sweep-labeled container left to reap"
+          fi
+          rc=1
+          break
+        elif [ "$cell" -eq 0 ]; then
+          break
+        elif [ "$attempt" -eq 1 ] && [ "$elapsed" -le 20 ] \
+            && grep -q "ENOENT.*/workspace" /tmp/oc-cell-out.txt; then
+          # Flake signature (#019): first attempt, died within 20s of cell
+          # start (a real cell runs an agent loop for minutes before it can
+          # genuinely fail), output carries the seed-phase ENOENT under
+          # /workspace. One more gate before retrying: the attempt must have
+          # emitted NO registry row — a row means the cell got past seeding
+          # and a second attempt would over-emit it (#003 must stay exact).
+          if [ "$(reg_count)" -ne "$reg_before" ]; then
+            echo ">>> cell $stem rc=$cell matches the flake signature BUT emitted a registry row — NOT retrying (a second attempt would over-emit the cell and fail the #003 audit); treating as a genuine failure"
+            rc=1
+            break
+          fi
+          retried=$((retried + 1))
+          echo ">>> cell $stem RETRY (workspace mount flake): rc=$cell after ${elapsed}s with seed-phase ENOENT under /workspace and no row emitted — re-running ONCE (#019)"
+          attempt=2
+        else
+          echo ">>> cell $stem rc=$cell (cell failed; a row was emitted iff runAgent reached the reporter flush — the end-of-sweep expected-attempts diff audits it); continuing"
+          rc=1
+          break
+        fi
+      done
     done
+    echo ">>> arm $CONFIG: retried_cells=$retried"
+    printf "%s\n" "$retried" > "$OC_RETRY_COUNT_FILE" || true
     exit $rc
   '
 SUB_RC=$?
@@ -745,7 +905,16 @@ if [ -n "$TIMINGS_INDEX" ]; then
   post_arm_capture_pass
 fi
 [ "$SUB_RC" -ne 0 ] && ARMS_RC=1
-log "==> arm $ARM exit rc=$SUB_RC (cell failures are tolerated; row accountability is audited post-gate)"
+# #019: fold the in-runner retry counter into the arm summary line. A missing
+# handoff file means the cell loop never completed (canary abort, wedged
+# sub-phase) — i.e. zero retries happened.
+ARM_RETRIES=0
+if [ -f "$RETRY_COUNT_FILE" ]; then
+  ARM_RETRIES="$(tr -cd '0-9' < "$RETRY_COUNT_FILE")"
+  rm -f "$RETRY_COUNT_FILE"
+fi
+[ -n "$ARM_RETRIES" ] || ARM_RETRIES=0
+log "==> arm $ARM exit rc=$SUB_RC retried_cells=$ARM_RETRIES (cell failures are tolerated; row accountability is audited post-gate)"
 done
 log ""
 log "==> all arms done (arms rc=$ARMS_RC)"
