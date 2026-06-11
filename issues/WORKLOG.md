@@ -347,6 +347,12 @@ quiet, no stray containers/locks. Committed as T5.
 
 # Campaign wrap — all 17 issues complete (2026-06-11)
 
+> Housekeeping (post-campaign): the 17 completed issue files (001–017)
+> were deleted from the tree; their per-AC Result evidence lives in git
+> history (commits a489f7e…9bfcc36, deletion commit following). Open
+> tickets remaining: #018 (threshold review) and #019 (workspace mount
+> flake — the carry-forward below, now a real issue).
+
 | Tranche | Commit | Issues |
 |---|---|---|
 | T1 | a489f7e | #001 #005 #009 #012 #013 #017 |
