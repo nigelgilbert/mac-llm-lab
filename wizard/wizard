@@ -17,8 +17,6 @@ source "${WIZARD_ROOT}/lib/log.sh"
 source "${WIZARD_ROOT}/lib/detect.sh"
 # shellcheck source=lib/deps.sh
 source "${WIZARD_ROOT}/lib/deps.sh"
-# shellcheck source=lib/keys.sh
-source "${WIZARD_ROOT}/lib/keys.sh"
 # shellcheck source=lib/probe.sh
 source "${WIZARD_ROOT}/lib/probe.sh"
 
@@ -34,7 +32,7 @@ wizard — install the mac-llm-lab code stack.
 
 Usage:
   wizard install            run the multi-step installer (default)
-  wizard test [MODE]        spin the tester orb. MODE = docker|ollama|bridge|models|deep (default: models)
+  wizard test [MODE]        spin the tester orb. MODE = docker|ollama (default: docker)
   wizard selftest           run the wizard test harness inside an isolated orb
   wizard doctor             read-only state inspection
   wizard --help             this message
@@ -68,19 +66,33 @@ cmd_install() {
   if [ "$(state_get TOPOLOGY)" = "full-local" ]; then
     step_45_main
     step_46_main
-    step_47_main
-    step_48_main
   fi
-  step_49_main
-  # Bring-up + smoke.
-  step_50_main
-  step_60_main || true
+  # OpenCode serving (migration decision §2.5): the launchd resident
+  # llama-server for the chosen tier. Self-skips in client-only topology.
+  # Guarded like 52/53/54 (#011): a failed serving install must abort the
+  # wizard — without this, a missing GGUF / never-green /health printed one
+  # red ✗ and the wizard still reached "Done", exit 0, with no daemon.
+  step_51_main || { fail "opencode serving install failed — no working tier server"; return 1; }
+  # OpenCode client (#007): container image + tier configs, global prompt
+  # (~/.config/opencode/AGENTS.md), `oc` wrapper on PATH. Both topologies.
+  step_52_main || { fail "opencode client image/config step failed"; return 1; }
+  step_53_main || { fail "global prompt install failed"; return 1; }
+  step_54_main || { fail "oc wrapper install failed"; return 1; }
+  # Smoke (61): injection wire-capture probe + a real `oc run` artifact.
+  # Never swallowed (#011): an installer that exits 0 must mean everything
+  # it installed works. (61 itself SKIPs rc=0 when client-only has no
+  # reachable LAN host — install complete, live verification deferred.)
+  step_61_main || {
+    fail "end-to-end smoke FAILED — stack installed but NOT verified"
+    printf "  log: %s\n\n" "$(log_path)"
+    return 1
+  }
   hdr "Done"
   printf "  log: %s\n\n" "$(log_path)"
 }
 
 cmd_test() {
-  local mode="${1:-models}"
+  local mode="${1:-docker}"
   hdr "wizard test (--${mode})"
   if ! command -v docker >/dev/null 2>&1; then
     fail "docker not on PATH — run './wizard/wizard install' first"
@@ -119,38 +131,102 @@ cmd_doctor() {
     info "no .state yet"
   fi
 
-  hdr ".env files"
-  for f in "${REPO_ROOT}/host/litellm/.env" "${REPO_ROOT}/client/claw-code/.env"; do
-    if [ -f "$f" ]; then ok "$f"
-    else warn "missing: $f"
-    fi
-  done
-
   hdr "Container state"
   if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    for c in mac-llm-lab-litellm claw-code mac-llm-lab-openwebui; do
-      local s
-      s=$(docker inspect --format '{{.State.Status}}' "$c" 2>/dev/null | tr -d '\n')
-      [ -z "$s" ] && s="absent"
-      case "$s" in
-        running) ok  "$c — running" ;;
-        absent)  info "$c — not present" ;;
-        *)       warn "$c — $s" ;;
-      esac
-    done
+    local c=mac-llm-lab-openwebui s
+    s=$(docker inspect --format '{{.State.Status}}' "$c" 2>/dev/null | tr -d '\n')
+    [ -z "$s" ] && s="absent"
+    case "$s" in
+      running) ok  "$c — running" ;;
+      absent)  info "$c — not present" ;;
+      *)       warn "$c — $s" ;;
+    esac
   else
     warn "docker daemon not reachable"
   fi
 
-  hdr "Bridge probe"
-  local bh bp
-  bh=$(state_get BRIDGE_HOST 2>/dev/null || printf 'host.docker.internal')
-  bp=$(state_get BRIDGE_PORT 2>/dev/null || printf '4000')
-  if curl -fsS --max-time 3 "http://${bh}:${bp}/health/liveliness" >/dev/null 2>&1 \
-    || curl -fsS --max-time 3 "http://localhost:${bp}/health/liveliness" >/dev/null 2>&1; then
-    ok "bridge reachable"
+  hdr "OpenCode serving (read-only)"
+  # Tier identity from THE single tier table (#016):
+  # host/llama-server/tiers.conf — the same file steps/51+52, oc,
+  # opencode-server and the sweep driver resolve; no mirrored map here.
+  # launchctl print + curl GET /health only — never mutates launchd state.
+  local t p l uid loaded green tiers_conf_ok=0
+  uid=$(id -u)
+  # shellcheck disable=SC1090,SC1091
+  if source "${REPO_ROOT}/host/llama-server/tiers.conf" 2>/dev/null; then
+    tiers_conf_ok=1
   else
-    warn "bridge not reachable at ${bh}:${bp}"
+    warn "tier table missing/unreadable: host/llama-server/tiers.conf"
+  fi
+  [ "$tiers_conf_ok" = 1 ] && for t in $TIERS_ALL; do
+    tier_resolve "$t" || { warn "tier table has no row for tier ${t}"; continue; }
+    p="$TIER_PORT"; l="$TIER_LAUNCHD_LABEL"
+    loaded=no; green=no
+    if [ "$l" != "-" ] && launchctl print "gui/${uid}/${l}" >/dev/null 2>&1; then
+      loaded=yes
+    fi
+    if curl -fsS --max-time 3 "http://127.0.0.1:${p}/health" >/dev/null 2>&1; then
+      green=yes
+    fi
+    if [ "$green" = yes ] && [ "$loaded" = yes ]; then
+      ok "opencode tier-${t} — launchd loaded, /health green on :${p}"
+    elif [ "$green" = yes ]; then
+      ok "opencode tier-${t} — /health green on :${p} (direct-boot, not launchd)"
+    elif [ "$loaded" = yes ]; then
+      warn "opencode tier-${t} — launchd loaded but /health not green on :${p} (model loading?)"
+    elif [ "$l" = "-" ]; then
+      info "opencode tier-${t} — not running (on-demand only; no launchd path by design)"
+    else
+      info "opencode tier-${t} — not resident (:${p} quiet)"
+    fi
+  done
+
+  hdr "OpenCode client (read-only)"
+  # Image / oc-on-PATH / global prompt / tier configs — pure inspection (#007).
+  local iv oc_link agents prompt_src cfg missing_cfg
+  if command -v docker >/dev/null 2>&1 && docker image inspect opencode:local >/dev/null 2>&1; then
+    iv=$(docker image history --no-trunc opencode:local 2>/dev/null \
+           | grep -oE 'OPENCODE_VERSION=[0-9][^ ]*' | head -n1 | cut -d= -f2)
+    ok "opencode:local image present${iv:+ (pin ${iv})}"
+  else
+    warn "opencode:local image missing (wizard install builds it)"
+  fi
+  oc_link="${HOME}/.local/bin/oc"
+  if [ -L "$oc_link" ] && [ -x "$oc_link" ]; then
+    ok "oc on PATH — ${oc_link} -> $(readlink "$oc_link")"
+  elif [ -e "$oc_link" ]; then
+    warn "oc at ${oc_link} exists but is not the wizard's symlink"
+  else
+    warn "oc not installed (${oc_link})"
+  fi
+  agents="${HOME}/.config/opencode/AGENTS.md"
+  prompt_src="${REPO_ROOT}/host/llama-server/docs/system-prompt.md"
+  if [ -f "$agents" ] && [ -s "$agents" ]; then
+    if cmp -s "$agents" "$prompt_src"; then
+      ok "global prompt installed — matches repo system-prompt.md"
+    else
+      warn "global prompt present but DIFFERS from repo system-prompt.md (customized?)"
+    fi
+  elif [ -e "$agents" ]; then
+    warn "global prompt at ${agents} is empty/irregular — oc run would exit 2"
+  else
+    warn "global prompt not installed (${agents}) — oc falls back to the repo source"
+  fi
+  missing_cfg=""
+  if [ "$tiers_conf_ok" = 1 ]; then
+    # config filenames from the tier table (#016) — same source as step 52
+    for t in $TIERS_ALL; do
+      tier_resolve "$t" || continue
+      cfg="$TIER_OPENCODE_CONFIG"
+      [ -f "${REPO_ROOT}/client/opencode/${cfg}" ] || missing_cfg="${missing_cfg} ${cfg}"
+    done
+    if [ -z "$missing_cfg" ]; then
+      ok "tier configs present (client/opencode: one per tiers.conf tier)"
+    else
+      warn "tier configs missing:${missing_cfg}"
+    fi
+  else
+    warn "tier configs unchecked (tier table unreadable)"
   fi
   printf '\n'
 }

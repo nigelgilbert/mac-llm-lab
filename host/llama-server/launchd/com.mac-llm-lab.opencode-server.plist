@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mac-llm-lab.opencode-server</string>
+
+    <!--
+      RESIDENT tier-64 OpenCode llama-server (Config B, issue #005; promoted to
+      the login-persistent DAILY SERVING DAEMON by the OpenCode migration
+      decision §2.5 / issue #002 — the role claw's :11435 plays today).
+
+      Render + bootstrap this plist with:
+          ./host/llama-server/scripts/opencode-server install   (fills placeholders with
+                                                                 XML escaping — #029 — then
+                                                                 waits for green /health)
+      Do NOT install by hand — placeholders are filled from models.conf tier-64.
+      The direct-boot script path ({start|stop|status|health|probe}) remains for
+      ad-hoc/phase-swap use; on-demand tiers 16/32 use it exclusively.
+
+      MEMORY BUDGET (issue #002): the 35B-A3B GGUF is ~21 GB resident. Until
+      #008 guts the claw stack, this co-resides with claw's identical-weights
+      server on :11435 (~21 GB more) — ~42 GB of weights + KV on the 64 GB box.
+      Accepted interim cost of build->prove->gut; #008 reclaims it.
+
+      Distinct from the production claw plist (com.mac-llm-lab.llama-server):
+        - own Label + own port (:11436, vs claw :11435, LiteLLM :4000)
+        - --jinja + the corrected template (#004), NO grammar file
+        - thinking-off via --chat-template-kwargs '{"enable_thinking":false}'
+        - generous -n so tool-call args don't truncate
+        - own log path, so it never clobbers claw's /tmp/llama-server.log
+      Because the Label differs, bootstrapping/booting-out this agent NEVER
+      disturbs the claw launchd instance.
+
+      Placeholders (filled by `opencode-server install`):
+        __BINARY__ __GGUF_PATH__ __TEMPLATE_PATH__ __CTX_SIZE__ __BATCH_SIZE__
+        __NPREDICT__ __TEMP__ __TOP_P__ __TOP_K__ __REPEAT_PENALTY__ __PRESENCE_PENALTY__
+      Port/host are deliberately NOT placeholders: the launchd identity is fixed
+      at the tier defaults (:11436 on 0.0.0.0), and `install` refuses
+      OPENCODE_LLAMA_PORT/HOST overrides pre-bootstrap (#005 render/poll parity).
+      Overrides remain available on the direct-boot `start` path.
+    -->
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__BINARY__</string>
+
+        <!-- network — own port; 0.0.0.0 so docker reaches via host.docker.internal -->
+        <string>--host</string>
+        <string>0.0.0.0</string>
+        <string>--port</string>
+        <string>11436</string>
+
+        <!-- model — same tier-64 GGUF as claw -->
+        <string>--model</string>
+        <string>__GGUF_PATH__</string>
+        <string>--alias</string>
+        <string>opencode</string>
+
+        <!-- context + memory — mirrors the claw plist -->
+        <string>--ctx-size</string>
+        <string>__CTX_SIZE__</string>
+        <string>-ngl</string>
+        <string>999</string>
+        <string>-fa</string>
+        <string>on</string>
+        <string>--cache-type-k</string>
+        <string>q8_0</string>
+        <string>--cache-type-v</string>
+        <string>q8_0</string>
+        <string>--batch-size</string>
+        <string>__BATCH_SIZE__</string>
+
+        <!-- sampler — tier-64 values from models.conf (same as claw) -->
+        <string>--temp</string>
+        <string>__TEMP__</string>
+        <string>--top-p</string>
+        <string>__TOP_P__</string>
+        <string>--top-k</string>
+        <string>__TOP_K__</string>
+        <string>--repeat-penalty</string>
+        <string>__REPEAT_PENALTY__</string>
+        <string>--presence-penalty</string>
+        <string>__PRESENCE_PENALTY__</string>
+        <string>--repeat-last-n</string>
+        <string>256</string>
+
+        <!-- Config B serving — corrected template + native <tool_call>, NO grammar.
+             Deliberately omits claw's --grammar-file. -->
+        <string>--jinja</string>
+        <string>--chat-template-file</string>
+        <string>__TEMPLATE_PATH__</string>
+
+        <!-- thinking-off. --chat-template-kwargs is deprecated-but-functional on
+             build 5594d13 (warning only); kept for parity with the setup-guide
+             recipe. --reasoning off is the startup-only alternative. -->
+        <string>--chat-template-kwargs</string>
+        <string>{"enable_thinking":false}</string>
+
+        <!-- generous n-predict: avoid tool-call arg truncation -->
+        <string>-n</string>
+        <string>__NPREDICT__</string>
+
+        <!-- misc -->
+        <string>--metrics</string>
+    </array>
+
+    <!-- Auto-start at login; revive on crash or unsuccessful exit (#029).
+         The old unconditional KeepAlive=true + ThrottleInterval=10 made a
+         stale GGUF path respawn a ~21 GB load attempt every ~10 s forever
+         into an unrotated /tmp log. Conditional KeepAlive restarts only
+         after a crash (signal) or a non-zero exit — never after a clean
+         exit — and ThrottleInterval=60 caps a config-broken daemon at one
+         attempt per minute. Recover: fix models.conf, then re-run
+         `opencode-server install`. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Own log path — never clobbers claw's /tmp/llama-server.log. -->
+    <key>StandardOutPath</key>
+    <string>/tmp/opencode-llama-server.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/opencode-llama-server.log</string>
+
+    <!-- Respawn backoff (#029): at most one restart attempt per 60 s. -->
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+</dict>
+</plist>

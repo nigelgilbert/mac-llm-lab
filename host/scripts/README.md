@@ -27,10 +27,10 @@ mac-llm-lab-hostctl status
 | `up` | `docker compose up -d`, then verify OWUI + Ollama healthy. Exits non-zero if OWUI doesn't come healthy within 30s. |
 | `down` | `docker compose down` (volume preserved). |
 | `status` | Container state + OWUI health + Ollama API + `ollama ps`. |
-| `warm <profile>` | Preload a profile. `claw` hits llama-server (always-resident probe); the rest POST `/api/generate` to Ollama with `keep_alive=30m`. |
+| `warm <profile>` | Preload a profile: POST `/api/generate` to Ollama with `keep_alive=30m`. |
 | `openui-url [-p P] [-q "..."]` | Print the canonical browser URL. URL-encodes `-q`. |
 
-Profiles: `general`, `fast`, `reasoning`, `digest`, `analyze`, `claw`.
+Profiles: `general`, `fast`, `reasoning`, `digest`, `analyze`. (The coding stack is separate — `oc status` covers its resident llama-server.)
 
 ## Env overrides
 
@@ -39,8 +39,7 @@ HOST_REPO          repo root (default: ~/Desktop/bench/mac-llm-lab)
 COMPOSE_DIR        compose dir (default: $HOST_REPO/host)
 OPENUI_BASE        external OWUI URL (default: http://mac-llm-lab.local)
 OLLAMA_API         local Ollama API (default: http://127.0.0.1:11434)
-LLAMA_SERVER_API   local llama-server API (default: http://127.0.0.1:11435)
-KEEP_ALIVE         Ollama warm duration (default: 30m); claw is always resident.
+KEEP_ALIVE         Ollama warm duration (default: 30m)
 ```
 
 Useful when running from a non-default repo path, or if you change any port.

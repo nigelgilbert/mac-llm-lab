@@ -41,8 +41,8 @@ url_encode() {
 
 profile_to_model() {
   case "$1" in
-    general|fast|reasoning|digest|analyze|claw) printf '%s' "$1" ;;
-    *) err "unknown profile: $1 (valid: general, fast, reasoning, digest, analyze, claw)" ;;
+    general|fast|reasoning|digest|analyze) printf '%s' "$1" ;;
+    *) err "unknown profile: $1 (valid: general, fast, reasoning, digest, analyze)" ;;
   esac
 }
 
@@ -96,8 +96,8 @@ Usage:
   mac-llm-lab status                            host health summary
   mac-llm-lab warm -p <profile>                 preload model on host
 
-Profiles: general, fast, reasoning, digest, analyze, claw
-  (claw is the agent-coding profile — used by claw-code, not OWUI deep-links.)
+Profiles: general, fast, reasoning, digest, analyze
+  (Agentic coding is the separate OpenCode stack — use `oc`, not this CLI.)
 
 Config: $CONFIG (see client/config.env.example)
 EOF

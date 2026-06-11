@@ -148,3 +148,20 @@ trace, missing fields).
 **Coding rule reminder:** F counts toward the unclassified rate. If a
 classifier finds itself reaching for F often, that's a signal the
 taxonomy needs to be rebuilt — not that F should expand.
+
+---
+
+## Addendum: lever-proposal template (2026-06-10)
+
+Salvaged from the deleted `V2-LEVERS.md` scaffold (W5 never ran; the
+per-class "plausible levers" above already capture its class-specific
+content). If a future classification pass produces lever tickets, each
+proposal should specify: **trace signature** (from the accepted pass) ·
+**run count / share** · **example run IDs (≤3)** · **proposed lever** ·
+**expected mechanism** (why it reduces p90 iter_count) · **metric expected
+to move** (named test, X→Y) · **validation experiment** (n, design, primary
+criterion, joint-test correction) · **pass-rate regression risk** ·
+**rollback / no-go criterion** (measurable) · **confidence**.
+Post-migration note: Class D's grammar-side levers are void (no grammar in
+the OpenCode stack); prompt-side levers are promoted per the
+prompt-is-the-moat finding (OPENCODE-MIGRATION-DECISION.md §1).

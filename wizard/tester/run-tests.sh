@@ -50,7 +50,6 @@ source "$RW/wizard/lib/ui.sh"
 source "$RW/wizard/lib/state.sh"
 source "$RW/wizard/lib/log.sh"
 source "$RW/wizard/lib/detect.sh"
-source "$RW/wizard/lib/keys.sh"
 
 # ============================================================================
 # 1. STATIC / LINT
@@ -199,60 +198,7 @@ out=$(state_get TRICKY)
 [ "$out" = 'a b=c $d "e" '\''f'\''' ] && t_ok "state value preserves spaces/=/\$/quotes" \
   || t_not_ok "state value escaping" "got [$out]"
 
-# 3e. ensure_litellm_key — generation when nothing exists
-WIZARD_STATE_FILE="$LOGS/state-key.txt"; rm -f "$WIZARD_STATE_FILE"
-REPO_ROOT="$LOGS/empty-repo"; mkdir -p "$REPO_ROOT"
-key1=$(ensure_litellm_key 2>/dev/null)
-case "$key1" in
-  sk-*) [ ${#key1} -eq 67 ] && t_ok "ensure_litellm_key generates sk-<64hex> (len=67)" \
-        || t_not_ok "key length" "len=${#key1}" ;;
-  *) t_not_ok "key prefix" "got [$key1]" ;;
-esac
-
-# 3f. second call returns same key (state-cached)
-key2=$(ensure_litellm_key 2>/dev/null)
-[ "$key1" = "$key2" ] && t_ok "ensure_litellm_key idempotent (state-cached)" \
-  || t_not_ok "key reuse" "differs"
-
-# 3g. key sourced from existing client/.env when state empty
-WIZARD_STATE_FILE="$LOGS/state-key2.txt"; rm -f "$WIZARD_STATE_FILE"
-REPO_ROOT="$LOGS/repo2"; mkdir -p "$REPO_ROOT/client/claw-code"
-printf 'LITELLM_MASTER_KEY=sk-from-client\nFOO=1\n' > "$REPO_ROOT/client/claw-code/.env"
-key3=$(ensure_litellm_key 2>/dev/null)
-[ "$key3" = "sk-from-client" ] && t_ok "ensure_litellm_key reads from client/.env" \
-  || t_not_ok "key source client/.env" "got [$key3]"
-
-# 3h. render_template substitution + idempotent (no overwrite)
-src="$LOGS/tmpl.in"; dst="$LOGS/tmpl.out"; rm -f "$dst"
-printf 'KEY=${LITELLM_MASTER_KEY}\nWS=${WORKSPACE}\n' > "$src"
-render_template "$src" "$dst" "LITELLM_MASTER_KEY=abc" "WORKSPACE=/w"
-grep -q '^KEY=abc' "$dst" && grep -q '^WS=/w' "$dst" \
-  && t_ok "render_template substitutes \${KEY} and \${WORKSPACE}" \
-  || t_not_ok "render_template subst"
-
-# 3i. second render call must NOT overwrite
-echo 'sentinel' > "$dst"
-render_template "$src" "$dst" "LITELLM_MASTER_KEY=changed" "WORKSPACE=/w2"
-[ "$(cat $dst)" = "sentinel" ] && t_ok "render_template refuses to overwrite (idempotent)" \
-  || t_not_ok "render_template overwrite guard"
-
-# 3j. render_template missing src -> fail
-render_template "$LOGS/does-not-exist" "$LOGS/x" "K=v" >/dev/null 2>&1
-[ $? -ne 0 ] && t_ok "render_template missing src -> nonzero" \
-  || t_not_ok "render_template missing src"
-
-# 3k. render_template handles sed metacharacters in values (|, &, /, \)
-src2="$LOGS/tmpl2.in"; dst2="$LOGS/tmpl2.out"; rm -f "$dst2"
-printf 'P=${PATHY}\nA=${AMP}\nB=${BSL}\n' > "$src2"
-render_template "$src2" "$dst2" \
-  'PATHY=/a/b|c/d' 'AMP=x&y' 'BSL=back\slash'
-grep -q '^P=/a/b|c/d$' "$dst2" \
-  && grep -q '^A=x&y$' "$dst2" \
-  && grep -q '^B=back\\slash$' "$dst2" \
-  && t_ok "render_template handles |, &, \\ in values without escaping" \
-  || t_not_ok "render_template metacharacter handling" "$(cat "$dst2" | tr '\n' '|')"
-
-# 3l. state file is chmod 600 after state_set (key material protection)
+# 3e. state file is chmod 600 after state_set (key material protection)
 WIZARD_STATE_FILE="$LOGS/state-perms.txt"; rm -f "$WIZARD_STATE_FILE"
 state_set SECRETKEY "sk-abcdef"
 perms=$(stat -c '%a' "$WIZARD_STATE_FILE" 2>/dev/null || stat -f '%Lp' "$WIZARD_STATE_FILE" 2>/dev/null)
@@ -348,40 +294,9 @@ for s in "$RW"/wizard/steps/*.sh; do
   source "$s"
 done
 
-# 47-llama-server: refuses to install when loaded+healthy.
-# Stub launchctl exit 0, curl exit 0 -> step_47_is_done true.
+# 51-opencode-server: never-bootout contract, parameterized by tier.
+# Stub launchctl exit 0 (loaded), curl exit 22 (unhealthy).
 mkdir -p "$SHIMS"
-cat >"$SHIMS/launchctl" <<'EOF'
-#!/bin/sh
-exit 0
-EOF
-cat >"$SHIMS/curl" <<'EOF'
-#!/bin/sh
-exit 0
-EOF
-chmod +x "$SHIMS"/launchctl "$SHIMS"/curl
-export PATH="$SHIMS:$ORIG_PATH"
-
-if step_47_is_done; then
-  t_ok "step_47_is_done: loaded+healthy -> true (M5 mid-eval safety)"
-else
-  t_not_ok "step_47_is_done loaded+healthy"
-fi
-
-# launchctl fail -> not loaded -> not done
-cat >"$SHIMS/launchctl" <<'EOF'
-#!/bin/sh
-exit 1
-EOF
-# Ensure no fallback path: also stub `grep` in PATH? No — launchctl list piped to grep.
-# step_47_loaded checks (launchctl print) || (launchctl list | grep). Both will fail.
-if ! step_47_is_done; then
-  t_ok "step_47_is_done: not-loaded -> false"
-else
-  t_not_ok "step_47_is_done not-loaded should be false"
-fi
-
-# curl fail (loaded but unhealthy) -> not done
 cat >"$SHIMS/launchctl" <<'EOF'
 #!/bin/sh
 exit 0
@@ -390,66 +305,58 @@ cat >"$SHIMS/curl" <<'EOF'
 #!/bin/sh
 exit 22
 EOF
-if ! step_47_is_done; then
-  t_ok "step_47_is_done: loaded-but-unhealthy -> false"
-else
-  t_not_ok "step_47_is_done loaded-unhealthy should be false"
-fi
-
-# step_47_main with TOPOLOGY=client-only short-circuits.
-WIZARD_STATE_FILE="$LOGS/state-step47.txt"; rm -f "$WIZARD_STATE_FILE"
-state_set TOPOLOGY client-only
-if step_47_main >/dev/null 2>&1; then
-  t_ok "step_47_main: client-only topology returns 0 without invoking installer"
-else
-  t_not_ok "step_47_main client-only" "rc=$?"
-fi
-
-export PATH="$ORIG_PATH"
-rm -f "$SHIMS"/*
-
-# 50-bringup running check
-cat >"$SHIMS/docker" <<'EOF'
-#!/bin/sh
-case "$*" in
-  "inspect --format {{.State.Running}} mac-llm-lab-litellm") echo true ;;
-  "inspect --format {{.State.Running}} claw-code") echo true ;;
-  *) echo false ;;
-esac
-EOF
-chmod +x "$SHIMS/docker"
+chmod +x "$SHIMS"/launchctl "$SHIMS"/curl
 export PATH="$SHIMS:$ORIG_PATH"
 
-if step_50_running mac-llm-lab-litellm; then
-  t_ok "step_50_running: stubbed running container detected"
+step_51_resolve 64
+if ! step_51_is_done; then
+  t_ok "step_51_is_done: tier-64 loaded-but-unhealthy -> false"
 else
-  t_not_ok "step_50_running stub"
+  t_not_ok "step_51_is_done loaded-unhealthy should be false"
 fi
 
-if ! step_50_running absent-container; then
-  t_ok "step_50_running: absent container -> false"
+cat >"$SHIMS/curl" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$SHIMS/curl"
+if step_51_is_done; then
+  t_ok "step_51_is_done: tier-64 loaded+healthy -> true (never bootout a green daemon)"
 else
-  t_not_ok "step_50_running absent"
+  t_not_ok "step_51_is_done loaded+healthy"
+fi
+
+# NOTE (#016): the port/label/config literals in the assertions below are
+# INTENTIONAL PINS of host/llama-server/tiers.conf (the single tier table the
+# steps now resolve) — they are test expectations, not a resolution map, and
+# exist precisely to catch an accidental tiers.conf edit.
+step_51_resolve 16
+[ "$OC_PORT" = "11437" ] && [ "$OC_LABEL" = "com.mac-llm-lab.opencode-server-16" ] \
+  && t_ok "step_51_resolve: tier-16 -> :11437 / -16 label" \
+  || t_not_ok "step_51_resolve tier-16" "port=$OC_PORT label=$OC_LABEL"
+
+step_51_resolve 32
+[ "$OC_PORT" = "11438" ] && [ -z "$OC_LABEL" ] \
+  && t_ok "step_51_resolve: tier-32 -> :11438, no launchd label (on-demand only)" \
+  || t_not_ok "step_51_resolve tier-32" "port=$OC_PORT label=$OC_LABEL"
+
+if ! step_51_resolve 99; then
+  t_ok "step_51_resolve: invalid tier -> nonzero"
+else
+  t_not_ok "step_51_resolve invalid tier should fail"
+fi
+
+# step_51_main with TOPOLOGY=client-only short-circuits (skip path).
+WIZARD_STATE_FILE="$LOGS/state-step51.txt"; rm -f "$WIZARD_STATE_FILE"
+state_set TOPOLOGY client-only
+if step_51_main >/dev/null 2>&1; then
+  t_ok "step_51_main: client-only topology returns 0 without invoking installer"
+else
+  t_not_ok "step_51_main client-only" "rc=$?"
 fi
 
 export PATH="$ORIG_PATH"
 rm -f "$SHIMS"/*
-
-# 49 is_done — needs both .env + image. Without either -> false.
-rm -f "$RW/client/claw-code/.env"
-if ! step_49_is_done; then
-  t_ok "step_49_is_done: missing .env -> false"
-else
-  t_not_ok "step_49_is_done missing .env"
-fi
-
-# 48 is_done — both .env + image. Without either -> false.
-rm -f "$RW/host/litellm/.env"
-if ! step_48_is_done; then
-  t_ok "step_48_is_done: missing .env -> false"
-else
-  t_not_ok "step_48_is_done missing .env"
-fi
 
 # 46 is_done — file exists but smaller than MIN_BYTES -> false (catches a
 # half-finished resumable download that was abandoned mid-stream).
@@ -471,6 +378,212 @@ else
 fi
 rm -f "$TARGET_GGUF"
 export HOME="$HOME_SAVE"
+
+# --- #007 opencode client steps (52/53/54/61) -------------------------------
+# These steps resolve sources under ${REPO_ROOT}/client + ${REPO_ROOT}/host;
+# make sure it points at the RW copy.
+REPO_ROOT="$RW"
+# 52: image pin check via stubbed docker. Pin source = client/opencode/.env,
+# read-back = buildkit layer history.
+OC_ENV_SAVE=""
+[ -f "$RW/client/opencode/.env" ] && OC_ENV_SAVE=$(cat "$RW/client/opencode/.env")
+printf 'OPENCODE_VERSION=2.0.0\n' > "$RW/client/opencode/.env"
+mkdir -p "$SHIMS"
+make_docker52() { # $1 = inspect rc, $2 = history line (may be empty)
+  cat >"$SHIMS/docker" <<EOF
+#!/bin/sh
+case "\$*" in
+  "image inspect opencode:local") exit $1 ;;
+  "image history --no-trunc opencode:local") printf '%s\n' '$2' ;;
+  *) exit 0 ;;
+esac
+EOF
+  chmod +x "$SHIMS/docker"
+}
+export PATH="$SHIMS:$ORIG_PATH"
+
+make_docker52 0 'RUN |1 OPENCODE_VERSION=2.0.0 /bin/sh -c apt-get update'
+if step_52_image_ok; then
+  t_ok "step_52_image_ok: image present + pin matches -> true"
+else
+  t_not_ok "step_52_image_ok pin match"
+fi
+
+make_docker52 0 'RUN |1 OPENCODE_VERSION=9.9.9 /bin/sh -c apt-get update'
+if ! step_52_image_ok; then
+  t_ok "step_52_image_ok: image present but pin MISMATCH -> false (rebuild path)"
+else
+  t_not_ok "step_52_image_ok pin mismatch should be false"
+fi
+
+make_docker52 0 ''
+if step_52_image_ok; then
+  t_ok "step_52_image_ok: pin undeterminable from history -> presence accepted (never rebuild blind)"
+else
+  t_not_ok "step_52_image_ok undeterminable should accept presence"
+fi
+
+make_docker52 1 ''
+if ! step_52_image_ok; then
+  t_ok "step_52_image_ok: image absent -> false"
+else
+  t_not_ok "step_52_image_ok absent should be false"
+fi
+export PATH="$ORIG_PATH"
+rm -f "$SHIMS"/*
+# restore the RW .env (the section-7 hot-sim reads it)
+if [ -n "$OC_ENV_SAVE" ]; then printf '%s\n' "$OC_ENV_SAVE" > "$RW/client/opencode/.env"
+else rm -f "$RW/client/opencode/.env"; fi
+
+# 52: tier-config verification (autoupdate pinned false + own tier port)
+if step_52_config_ok opencode.json 11436 \
+   && step_52_config_ok opencode.16.json 11437 \
+   && step_52_config_ok opencode.32.json 11438; then
+  t_ok "step_52_config_ok: repo tier configs pass (autoupdate:false + tier port)"
+else
+  t_not_ok "step_52_config_ok repo configs"
+fi
+printf '{ "provider": { "x": { "options": { "baseURL": "http://h:11436/v1" } } } }\n' \
+  > "$RW/client/opencode/opencode.bad.json"
+if ! step_52_config_ok opencode.bad.json 11436; then
+  t_ok "step_52_config_ok: config without autoupdate:false -> rejected (#003 TUI self-update)"
+else
+  t_not_ok "step_52_config_ok should reject missing autoupdate pin"
+fi
+rm -f "$RW/client/opencode/opencode.bad.json"
+
+# 52: client-only remote render — host swapped in, idempotent second call
+out=$(step_52_render_remote "labbox.lan" 2>&1)
+if [ -f "$RW/client/opencode/opencode.remote.json" ] \
+   && grep -q 'labbox.lan:11436' "$RW/client/opencode/opencode.remote.json" \
+   && ! grep -q 'host.docker.internal' "$RW/client/opencode/opencode.remote.json" \
+   && grep -q 'labbox.lan:11437' "$RW/client/opencode/opencode.remote.16.json" \
+   && grep -q 'labbox.lan:11438' "$RW/client/opencode/opencode.remote.32.json"; then
+  t_ok "step_52_render_remote: all three tier configs rendered with the LAN host"
+else
+  t_not_ok "step_52_render_remote render" "$out"
+fi
+out=$(step_52_render_remote "labbox.lan" 2>&1)
+if printf '%s' "$out" | grep -q 'already done'; then
+  t_ok "step_52_render_remote: second call with same host -> already done"
+else
+  t_not_ok "step_52_render_remote idempotency" "$out"
+fi
+out=$(step_52_render_remote "otherbox.lan" 2>&1)
+if grep -q 'otherbox.lan:11436' "$RW/client/opencode/opencode.remote.json"; then
+  t_ok "step_52_render_remote: changed host re-renders (derived file, no stale config)"
+else
+  t_not_ok "step_52_render_remote host change" "$out"
+fi
+rm -f "$RW/client/opencode"/opencode.remote*.json
+
+# 53: global prompt install — content compare, install, never-clobber
+HOME_SAVE53="$HOME"
+export HOME="$LOGS/fakehome53"
+mkdir -p "$HOME"
+if ! step_53_is_done; then
+  t_ok "step_53_is_done: AGENTS.md missing -> false"
+else
+  t_not_ok "step_53_is_done missing should be false"
+fi
+out=$(step_53_main 2>&1)
+if step_53_is_done && cmp -s "$RW/host/llama-server/docs/system-prompt.md" \
+                             "$HOME/.config/opencode/AGENTS.md"; then
+  t_ok "step_53_main: installs AGENTS.md matching repo system-prompt.md"
+else
+  t_not_ok "step_53_main install" "$out"
+fi
+out=$(step_53_main 2>&1)
+if printf '%s' "$out" | grep -q 'already done'; then
+  t_ok "step_53_main: second run -> already done"
+else
+  t_not_ok "step_53_main idempotency" "$out"
+fi
+printf '\nUSER CUSTOMIZATION\n' >> "$HOME/.config/opencode/AGENTS.md"
+out=$(step_53_main 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'USER CUSTOMIZATION' "$HOME/.config/opencode/AGENTS.md" \
+   && printf '%s' "$out" | grep -q 'DIFFERENT'; then
+  t_ok "step_53_main: customized AGENTS.md NOT clobbered (warns, rc=0)"
+else
+  t_not_ok "step_53_main never-clobber" "rc=$rc"
+fi
+# missing/empty source must fail loud (it would install a null prompt)
+( REPO_ROOT="$LOGS/empty-repo53"; mkdir -p "$REPO_ROOT"; step_53_main >/dev/null 2>&1 )
+[ $? -ne 0 ] && t_ok "step_53_main: missing prompt source -> nonzero (no null prompt)" \
+  || t_not_ok "step_53_main missing source should fail"
+export HOME="$HOME_SAVE53"
+
+# 54: oc symlink onto PATH — install, idempotent, never-clobber, dangling fix
+HOME_SAVE54="$HOME"
+export HOME="$LOGS/fakehome54"
+mkdir -p "$HOME"
+if ! step_54_is_done; then
+  t_ok "step_54_is_done: no symlink -> false"
+else
+  t_not_ok "step_54_is_done missing should be false"
+fi
+out=$(step_54_main 2>&1)
+if step_54_is_done && [ "$(readlink "$HOME/.local/bin/oc")" = "$RW/client/opencode/bin/oc" ]; then
+  t_ok "step_54_main: symlinks ~/.local/bin/oc -> repo oc"
+else
+  t_not_ok "step_54_main symlink" "$out"
+fi
+out=$(step_54_main 2>&1)
+if printf '%s' "$out" | grep -q 'already done'; then
+  t_ok "step_54_main: second run -> already done"
+else
+  t_not_ok "step_54_main idempotency" "$out"
+fi
+rm -f "$HOME/.local/bin/oc"
+printf '#!/bin/sh\necho foreign\n' > "$HOME/.local/bin/oc"
+chmod +x "$HOME/.local/bin/oc"
+out=$(step_54_main 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && [ ! -L "$HOME/.local/bin/oc" ] \
+   && grep -q 'foreign' "$HOME/.local/bin/oc" \
+   && printf '%s' "$out" | grep -qi 'leaving as-is'; then
+  t_ok "step_54_main: foreign oc at target NOT clobbered (warns, rc=0)"
+else
+  t_not_ok "step_54_main never-clobber" "rc=$rc"
+fi
+rm -f "$HOME/.local/bin/oc"
+ln -s /does/not/exist "$HOME/.local/bin/oc"
+out=$(step_54_main 2>&1)
+if step_54_is_done; then
+  t_ok "step_54_main: dangling symlink replaced (debris, not user intent)"
+else
+  t_not_ok "step_54_main dangling replace" "$out"
+fi
+export HOME="$HOME_SAVE54"
+
+# 61: smoke preconditions + client-only no-LAN-host explicit skip
+HOME_SAVE61="$HOME"
+export HOME="$LOGS/fakehome61"
+mkdir -p "$HOME/.local/bin"
+WIZARD_STATE_FILE="$LOGS/state-step61.txt"; rm -f "$WIZARD_STATE_FILE"
+state_set TOPOLOGY client-only
+state_set OPENCODE_HOST nohost.invalid
+out=$(step_61_main 2>&1); rc=$?
+if [ "$rc" -ne 0 ]; then
+  t_ok "step_61_main: oc not installed -> nonzero (smoke can't pass vacuously)"
+else
+  t_not_ok "step_61_main missing oc should fail" "$out"
+fi
+ln -s "$RW/client/opencode/bin/oc" "$HOME/.local/bin/oc"
+cat >"$SHIMS/curl" <<'EOF'
+#!/bin/sh
+exit 22
+EOF
+chmod +x "$SHIMS/curl"
+export PATH="$SHIMS:$ORIG_PATH"
+out=$(step_61_main 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'SKIPPED'; then
+  t_ok "step_61_main: client-only + unreachable LAN host -> explicit SKIP, rc=0"
+else
+  t_not_ok "step_61_main client-only skip" "rc=$rc: $(printf '%s' "$out" | head -c 200)"
+fi
+export PATH="$ORIG_PATH"
+rm -f "$SHIMS"/*
+export HOME="$HOME_SAVE61"
 
 # ============================================================================
 # 6. ENTRYPOINT DISPATCHER (bash + zsh)
@@ -542,8 +655,9 @@ EOF
 
 # launchctl: pretend service is loaded.
 make_logger launchctl 'exit 0'
-# curl: pretend health probe + everything 200.
-make_logger curl 'exit 0'
+# curl: pretend health probe + everything 200. Echo the code too: oc's
+# green() (exercised by step 61) reads `-w %{http_code}` from stdout.
+make_logger curl 'echo 200'
 # docker: report "running" for managed containers, image inspect succeeds.
 cat >"$SHIMS/docker" <<EOF
 #!/bin/sh
@@ -555,6 +669,7 @@ case "\$*" in
   "image inspect "*) exit 0 ;;
   "compose "*"up "*) echo "REFUSED: compose up should not run when already running" >> "$TRACE"; exit 99 ;;
   "compose "*"build"*) echo "REFUSED: compose build should be image-cached" >> "$TRACE"; exit 99 ;;
+  "build "*) echo "REFUSED: docker build should be image-cached (step 52)" >> "$TRACE"; exit 99 ;;
   *) exit 0 ;;
 esac
 EOF
@@ -592,12 +707,6 @@ WIZARD_STATE_FILE="$RW/wizard/.state"
 : > "$WIZARD_STATE_FILE"
 state_set TOPOLOGY full-local
 state_set TIER 64
-state_set BRIDGE_HOST host.docker.internal
-state_set BRIDGE_PORT 4000
-state_set LITELLM_MASTER_KEY "sk-deadbeef$(printf 'x%.0s' $(seq 1 56))"
-mkdir -p "$RW/client/claw-code" "$RW/host/litellm"
-echo "LITELLM_MASTER_KEY=sk-test" > "$RW/client/claw-code/.env"
-echo "LITELLM_MASTER_KEY=sk-test" > "$RW/host/litellm/.env"
 
 # Stage a fake llama-server binary in $HOME/.local/bin
 export HOME="$LOGS/fakehome"
@@ -650,19 +759,27 @@ else
   t_skip "smoke.sh missing" ""
 fi
 
-# Default mode must be 'models', NOT 'deep' — the gate that protects the M5
-# from spurious 1-token chat round-trips during install.
-if grep -qE 'MODE.*:-\s*models' "$SMOKE" 2>/dev/null; then
-  t_ok "smoke.sh: default mode is 'models' (not 'deep' — protects M5)"
+# Default mode must be 'docker' — the read-only liveness check; the tester
+# must never default to anything that hits a model server during install.
+if grep -qE 'MODE.*:-\s*docker' "$SMOKE" 2>/dev/null; then
+  t_ok "smoke.sh: default mode is 'docker' (read-only liveness)"
 else
-  t_not_ok "smoke.sh default mode" "expected MODE:-models default"
+  t_not_ok "smoke.sh default mode" "expected MODE:-docker default"
 fi
-# 60-smoke.sh and probe_models must call models mode, not deep.
-if grep -q 'probe_models\|/v1/models' "$REPO/wizard/steps/60-smoke.sh" 2>/dev/null \
-   && ! grep -q 'probe_deep\|smoke.sh deep' "$REPO/wizard/steps/60-smoke.sh"; then
-  t_ok "60-smoke.sh: calls models probe, not deep"
+# Legacy litellm-bridge modes must be gone (#008 gut).
+if ! grep -qE '^[[:space:]]*(bridge|models|deep)\)' "$SMOKE" 2>/dev/null; then
+  t_ok "smoke.sh: no legacy bridge/models/deep modes (#008)"
 else
-  t_not_ok "60-smoke.sh deep-gate" "step calls deep mode"
+  t_not_ok "smoke.sh legacy modes" "bridge/models/deep still dispatchable"
+fi
+# 61-opencode-smoke (#007): must assert BOTH the injection wire-capture probe
+# (`oc probe`, the #001 oracle) and a real run artifact; no legacy bridge probes.
+if grep -q '"$oc" probe' "$REPO/wizard/steps/61-opencode-smoke.sh" 2>/dev/null \
+   && grep -q 'smoke.txt' "$REPO/wizard/steps/61-opencode-smoke.sh" \
+   && ! grep -q 'probe_deep\|probe_models\|probe_bridge' "$REPO/wizard/steps/61-opencode-smoke.sh"; then
+  t_ok "61-opencode-smoke.sh: injection probe + oc-run artifact, no legacy probes"
+else
+  t_not_ok "61-opencode-smoke.sh assertions" "expected oc probe + smoke.txt checks"
 fi
 
 # ============================================================================
@@ -670,21 +787,7 @@ fi
 # ============================================================================
 hdr "9. negative paths"
 
-# 9a. ensure_litellm_key with no openssl
-WIZARD_STATE_FILE="$LOGS/state-no-ossl.txt"; rm -f "$WIZARD_STATE_FILE"
-REPO_ROOT="$LOGS/empty-repo2"; mkdir -p "$REPO_ROOT"
-mkdir -p "$SHIMS"
-# Create a sandbox PATH that lacks openssl.
-( export PATH="$SHIMS"; ensure_litellm_key >/dev/null 2>&1 )
-[ $? -ne 0 ] && t_ok "ensure_litellm_key: no openssl on PATH -> nonzero" \
-  || t_not_ok "ensure_litellm_key no openssl"
-
-# 9b. render_template with empty src arg
-render_template "" "$LOGS/x" "K=v" >/dev/null 2>&1
-[ $? -ne 0 ] && t_ok "render_template: empty src -> nonzero" \
-  || t_not_ok "render_template empty src"
-
-# 9c. slider with single option returns it immediately on Enter
+# 9a. slider with single option returns it immediately on Enter
 out=$(printf '\n' | TERM=dumb slider_pick "single" only 2>/dev/null)
 [ "$out" = "only" ] && t_ok "slider with N=1 returns the only option" \
   || t_not_ok "slider N=1" "got [$out]"

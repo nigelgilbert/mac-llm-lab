@@ -1,28 +1,32 @@
-# Ephemeral test container. Always invoked via `docker compose run --rm test`,
-# never `up -d`. BACKEND is set per-phase by run.sh.
+# Ephemeral test containers. Always invoked via `docker compose run --rm ...`
+# or `docker compose build ...`, never `up -d`.
 
 services:
+  # Baked eval-runner image for run-config-ab.sh's arm sub-phases (issue #009):
+  # node + git + docker CLI + compose preinstalled, replacing the per-sweep
+  # `apk add` on stock docker:cli. BUILD-ONLY service — never `run`/`up`'d via
+  # compose (run-config-ab.sh launches it with plain `docker run` so the mount
+  # contract stays explicit there). Build: `docker compose build runner`.
+  # The `build` profile keeps it out of default `up`/`run` resolution.
+  runner:
+    profiles: ["build"]
+    build:
+      context: .
+      dockerfile: Dockerfile.runner
+    image: mac-llm-lab-eval-runner:local
+    command: ["true"]
+
+  # Plain node toolchain (no docker CLI): unit tests + analysis scripts.
+  # Default command (Dockerfile CMD) runs __tests__/lib + __tests__/scripts.
   test:
     build:
       context: .
     image: mac-llm-lab-test:local
     working_dir: /test
-    env_file:
-      - ../litellm/.env
     environment:
-      - BRIDGE_URL=http://host.docker.internal:4000
-      - ANTHROPIC_BASE_URL=http://host.docker.internal:4000
-      - ANTHROPIC_API_KEY=${LITELLM_MASTER_KEY}
-      - BACKEND=${BACKEND:-llama-server}
-      - MODEL_LABEL=${MODEL_LABEL:-}
       - TIER=${TIER:-64}
-      - TEST_SUITE=${TEST_SUITE:-}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
-      # Iteration-distribution per-run artifacts. Static mount (the v2 plan
-      # rejected dynamic per-run remounts under a long-lived service); per-run
-      # subdirectories are created by runClaw() under <run-id>/. Mirror mount in
-      # ../litellm/docker-compose.yml so the LiteLLM custom callback writes to
-      # the same host directory.
+      # Per-run sidecar artifacts + sweep registries. Static mount; per-run
+      # subdirectories are created by the runner under <run-id>/. The registry
+      # default path (lib/registry.js) resolves under this mount.
       - ./.claw-runtime:/workspace/.claw-runtime

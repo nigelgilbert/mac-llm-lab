@@ -6,7 +6,7 @@ A single LLM is a primitive. It is closer to a brain in a jar than a tool — pa
 
 The frontier hides this. Consumers see a chat box and infer that "the model" is the product. So when they meet a local 30B Qwen they ask it to behave like a hosted system, are disappointed when it can't, and conclude small LLMs are toys.
 
-**This project is the counter-argument.** On a single Apple Silicon Mac, with one model resident at a time, we build the architecture around the model: task-specific profile swaps, a long-context summarizer, a thinking-mode reasoner, an agentic coding loop wired through an Anthropic-API bridge, all behind a shared LAN UI. Small open models, well-orchestrated, are insanely useful — and most of the leverage was always in the orchestration, not the parameter count.
+**This project is the counter-argument.** On a single Apple Silicon Mac, with one model resident at a time, we build the architecture around the model: task-specific profile swaps, a long-context summarizer, a thinking-mode reasoner, an agentic coding loop on a local model, all behind a shared LAN UI. Small open models, well-orchestrated, are insanely useful — and most of the leverage was always in the orchestration, not the parameter count.
 
 ## Three reasons it matters
 
@@ -36,9 +36,9 @@ On-edge compute is the only kind of compute you actually own. This rig is built 
 The mission isn't "run a model." It's to ship two real **products** built from a team of small specialists, on hardware you already own:
 
 - **`chat`** — 100% local ChatGPT. Ask a question, get a grounded answer, optionally over your own corpus.
-- **`code`** — 100% local Claude Code. An agentic coding loop with tools, file edits, and multi-turn work, via [`claw-code`](https://github.com/ultraworkers/claw-code) through a LiteLLM Anthropic-API bridge talking to a local model.
+- **`code`** — 100% local Claude Code. An agentic coding loop with tools, file edits, and multi-turn work, via [OpenCode](https://github.com/sst/opencode) talking to a local model.
 
-The pattern under both is a **multi-net architecture** — a team of small specialists, not one giant model. A typical `chat` request flows router → optional query rewrite → embedder → vector search → reranker → reasoning LLM → answer; cheap stages do most of the work, and the one expensive stage (the reasoning LLM) is where extra memory pays off. Profiles swap into that reasoning stage by task — `general`, `fast`, `reasoning`, `digest`, `analyze`, `claw` — each the right model for the job, not a finetune of one base.
+The pattern under both is a **multi-net architecture** — a team of small specialists, not one giant model. A typical `chat` request flows router → optional query rewrite → embedder → vector search → reranker → reasoning LLM → answer; cheap stages do most of the work, and the one expensive stage (the reasoning LLM) is where extra memory pays off. Profiles swap into that reasoning stage by task — `general`, `fast`, `reasoning`, `digest`, `analyze` — each the right model for the job, not a finetune of one base.
 
 The same shape compresses across tiers. At 64 GB the reasoning stage is a 27–49B model behind Open WebUI; at 16 GB it's a ~7 GB sidecar — Qwen2.5-7B Q4 reasoning, nomic embed, bge reranker, sqlite-vec store, ~200 lines of glue. Same architecture, different budget. That stack — multi-net + agent + retrieval — is the same general shape the hosted products use. Doing it locally with small open models is the proof.
 
@@ -54,8 +54,8 @@ A reference build, fully spec'd, fully reproducible:
 
 - **Host:** Ollama native on Apple Silicon for unified-memory throughput; one profile resident at a time.
 - **UI:** Open WebUI in Docker, bound to LAN port 80 via mDNS (`mac-llm-lab.local`), with per-user accounts and a `Guests` group.
-- **Agentic coding:** `claw-code` in Docker, talking to a LiteLLM bridge that translates Anthropic API calls into Ollama calls.
-- **Five profiles + claw:** see [`profiles.md`](profiles.md) for the model picks, quants, and `num_ctx` settings; [`spec.md`](spec.md) for the architecture.
+- **Agentic coding:** OpenCode in Docker, driving a launchd-resident llama-server (OpenAI-compatible) via the `oc` wrapper CLI.
+- **Five profiles:** see [`profiles.md`](profiles.md) for the model picks, quants, and `num_ctx` settings; [`spec.md`](spec.md) for the architecture.
 - **Phased roadmap:** MVP first, then Wake-on-LAN + Tailscale remote HTTPS, then RAG sidecars and curated corpora, then self-hosted search, then hardening.
 
 You can fork it, rebrand it (see the README's fork checklist), and run it on your own LAN. That's the point.

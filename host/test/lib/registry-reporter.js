@@ -9,7 +9,7 @@
 //     `passed` is derived from the test:pass / test:fail event type (never
 //     null).
 //
-// Wired in package.json + entrypoint.sh + the sweep scripts via:
+// Wired in package.json + the sweep driver's per-cell loop via:
 //   --test-reporter=./lib/registry-reporter.js --test-reporter-destination=stdout
 //
 // runAgent emits the data the reporter needs via diagnostics keyed to the
@@ -36,11 +36,13 @@
 //     The asymmetry is intentional: runAgent does NOT wrap its body in
 //     try/finally to fire the sentinel on throw, so SIGTERM landing between
 //     a mid-runAgent throw and end-of-stream loses these sidecars. Mid-
-//     runAgent throws are rare (spawn ENOENT-class) and expected-attempts.mjs
-//     --diff catches the resulting missing cells, so the tradeoff is
+//     runAgent throws are rare (spawn ENOENT-class) and the driver's row
+//     audit (#003: run-config-ab.sh writes the expected-attempts plan before
+//     its arms phase and diffs the fresh registry rows post-gate) names the
+//     resulting missing cells and fails the sweep, so the tradeoff is
 //     acceptable. Don't "fix" by adding try/finally without revisiting this.
 
-import { writeAssertionResult } from './claw.js';
+import { writeAssertionResult } from './registry_emit.js';
 import { TIER_LABEL } from './tier.js';
 
 const POST_STDERR_TAIL = 800;
@@ -66,6 +68,13 @@ function printHeader(pending) {
   if (pending.agent_result) {
     const a = pending.agent_result;
     console.log(`  agent: exit=${a.code} elapsed=${a.elapsedMs}ms files=${JSON.stringify(a.files ?? [])}`);
+    // Exit code is telemetry, not a pass gate (issue #001): a non-zero,
+    // non-null code means the agent crashed before finishing. The workspace
+    // post-script still decides PASS/FAIL above; surface the crash so a
+    // workspace-passed-but-agent-crashed run is visible rather than silent.
+    if (typeof a.code === 'number' && a.code !== 0) {
+      console.log(`  ⚠ agent crashed before finishing (exit=${a.code}); workspace oracle still decided the verdict`);
+    }
     if (a.code !== 0 && a.stderrTail) {
       console.log(`  agent stderr (tail):\n${a.stderrTail}`);
     }

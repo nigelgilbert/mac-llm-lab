@@ -3,6 +3,17 @@
 **Status (2026-05-04):** Sprint 0 + Sprint 1 (through 1.21) closed. Active: **Sprint 1.5** (pre-matrix cleanup) + **1.23** (sampler ablation, owner=user). Next: **Sprint 2** (Usability Pack) → **Sprint 3** (Discrimination Matrix v1) → **Sprint 4** (Hidden Holdouts, lighter scope). The productivity grader is deferred — see §"Deferred".
 **Why the re-order:** the N=10 `watch-20260504-0254` sweep surfaced a sampler×tier confound and three harness bugs that contaminate any matrix shipped today. Detail in §"Re-ordering 2026-05-04".
 
+> **Migration annotation (2026-06-10).** This plan predates the OpenCode migration and is
+> still the live roadmap for **Sprints 2–4** — but its substrate is historical: the
+> `claw.js` runner, `.claw-runtime/` registries, the LiteLLM `_bridge.jsonl`, and the
+> `host/test/.claw-runtime/` paths below are all claw-stack artifacts; rebuild on the
+> generic config-vs-config driver. In particular, the **`latency` / `prose-quality` /
+> `tool-discipline`** probes referenced throughout were **claw-bridge-only and emit no
+> registry rows** (decision §4 — [OPENCODE-MIGRATION-DECISION.md](../OPENCODE-MIGRATION-DECISION.md));
+> they have **no OpenCode counterpart yet** and must be **rebuilt as driver arms** (+
+> #021/#022 timings), not ported. Revival path:
+> [research-salvage-next-tranche §6](../../../../research/research-salvage-next-tranche-20260610.md).
+
 ---
 
 ## Plan philosophy

@@ -262,4 +262,4 @@ You shared the URL before signing up. Recovery:
 6. Client CLI — [`../client/`](../client/) (`mac-llm-lab chat`, `mac-llm-lab warm`, `mac-llm-lab status`).
 7. End-to-end acceptance — spec §13 step 7.
 
-**For claw-code users:** also bring up the LiteLLM bridge ([`litellm/`](litellm/)) and the llama-server native daemon ([`llama-server/`](llama-server/)). Those are independent of OWUI — you can skip them if you only need the chat UI.
+**For coding-stack users:** the OpenCode serving daemon lives in [`llama-server/`](llama-server/) and is installed by the wizard (`./wizard/wizard install`). It is independent of OWUI — you can skip it if you only need the chat UI. (The former claw-code/LiteLLM bridge stack is retired; see the root README's migration note and the `claw-stack-final` tag.)

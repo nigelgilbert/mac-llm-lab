@@ -174,7 +174,7 @@
     "harness_version": "d0d46f4",
     "prompt_pack_version": "pp01",
     "tier_compatibility": [32],
-    "notes": "Sprint 1.19 Sweep 2 cell A — Qwen3.5-9B Q5_K_XL @ ctx 32k with c6 sampler (incl. min_p=0.05 default). Anchor cell; pairs with C (quant), B (ctx), D (rep_pen). enable_thinking forced true via --chat-template-kwargs. Sweep-only config; remove after coalesce."
+    "notes": "Sprint 1.19 Sweep 2 cell A — Qwen3.5-9B Q5_K_XL @ ctx 32k with c6 sampler (incl. min_p=0.05 default). Anchor cell; pairs with C (quant), B (ctx), D (rep_pen). enable_thinking forced true via --chat-template-kwargs (server LAUNCH flag; the harness route anthropic/claw-llama overrides it to false per-request, so harness runs are thinking-OFF — issue #017, see docs/TIER16-THINKING-PARITY-DECISION.md). Sweep-only config; remove after coalesce."
   },
   "qwen35-9b-q5kxl-ctx64k-v6antiloop-pp01": {
     "model_config_id": "qwen35-9b-q5kxl-ctx64k-v6antiloop-pp01",
@@ -335,7 +335,7 @@
     "harness_version": "d0d46f4",
     "prompt_pack_version": "pp01",
     "tier_compatibility": [16],
-    "notes": "**ARCHIVED 2026-05-02 (Sprint 1.20)** — superseded as tier-16 production by `qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01` after t16 harness-error triage confirmed the 13.5% error rate was 100% `BadRequestError: request (NNNNN tokens) exceeds the available context size (32768 tokens)` (4/4 in N=1 diagnostic; 27/28 stream_aborted-fingerprint match in 1.19 confirm; cross-validated by 5/6 t32 errors clustering at the 64k ceiling). Same model + sampler at ctx 64k clears the ceiling. Retained for historical comparability with Sprint 1.19 confirm baseline. Original notes: Tier-16 production (Sprint 1.19, 2026-05-02). Qwen3.5-9B IQ4_XS @ ctx 32k with c6 sampler (~5 GB weights, matches prior 7B Q5 footprint). enable_thinking forced true. **N=8 confirm (208 attempts):** 84.6% pass-all (176/208), 98.3% done-only (176/179), 13.5% harness-error rate (28/208), 1 timeout. Baselines `qwen35-9b-iq4xs-ctx32k-v7noreppen-pp01` (γ), `qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01` (δ), `qwen35-9b-iq4xs-ctx64k-v7noreppen-pp01` (ζ) lost the Sweep 3 sweep — see TIER-EVAL-MEMO-20260502-n8-confirm-vs-baseline.md. Replaces archived `qwen25-7b-instruct-q5km-ctx32k-v1prod-pp01` (Qwen2.5-7B Q5 @ 32k baseline)."
+    "notes": "**ARCHIVED 2026-05-02 (Sprint 1.20)** — superseded as tier-16 production by `qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01` after t16 harness-error triage confirmed the 13.5% error rate was 100% `BadRequestError: request (NNNNN tokens) exceeds the available context size (32768 tokens)` (4/4 in N=1 diagnostic; 27/28 stream_aborted-fingerprint match in 1.19 confirm; cross-validated by 5/6 t32 errors clustering at the 64k ceiling). Same model + sampler at ctx 64k clears the ceiling. Retained for historical comparability with Sprint 1.19 confirm baseline. Original notes: Tier-16 production (Sprint 1.19, 2026-05-02). Qwen3.5-9B IQ4_XS @ ctx 32k with c6 sampler (~5 GB weights, matches prior 7B Q5 footprint). enable_thinking forced true (server LAUNCH flag only; these N=8 numbers were produced thinking-OFF because the harness routes through anthropic/claw-llama, whose per-request enable_thinking:false overrides the launch flag — issue #017, see docs/TIER16-THINKING-PARITY-DECISION.md). **N=8 confirm (208 attempts):** 84.6% pass-all (176/208), 98.3% done-only (176/179), 13.5% harness-error rate (28/208), 1 timeout. Baselines `qwen35-9b-iq4xs-ctx32k-v7noreppen-pp01` (γ), `qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01` (δ), `qwen35-9b-iq4xs-ctx64k-v7noreppen-pp01` (ζ) lost the Sweep 3 sweep — see TIER-EVAL-MEMO-20260502-n8-confirm-vs-baseline.md. Replaces archived `qwen25-7b-instruct-q5km-ctx32k-v1prod-pp01` (Qwen2.5-7B Q5 @ 32k baseline)."
   },
   "qwen35-9b-iq4xs-ctx32k-v7noreppen-pp01": {
     "model_config_id": "qwen35-9b-iq4xs-ctx32k-v7noreppen-pp01",
@@ -381,7 +381,7 @@
     "harness_version": "d0d46f4",
     "prompt_pack_version": "pp01",
     "tier_compatibility": [16],
-    "notes": "**Tier-16 production (Sprint 1.20, 2026-05-02)** — promoted from sweep-only after Sprint 1.20 t16 harness-error triage. Identical model+sampler to archived `qwen35-9b-iq4xs-ctx32k-v6antiloop-pp01`; only n_ctx changes 32k→64k. Closes the 32k context ceiling that drove 13.5% `BadRequestError` rate in 1.19 confirm (root cause: read→write→reread of large source files pushed conversation past 32k on hot tests like expression-eval, csv-parser, lru-cache). **N=8 64k confirm (208 attempts, `t16-1.20-confirm-n8-iq4xs-64k-20260502-0459`):** 90.8% pass-rate (177/195, harness_error excluded per Layer-A; +6.2 pp vs 1.19 32k baseline), 99.4% done-only (177/178), 6.25% typed harness_error rate (13/208; -7.25 pp), 8.2% timeouts (17/208; +7.7 pp). Failures reshape from typed overflows to wallclock: expression-eval is the dominant residual overflow site (7/8 reps; up to 76 189 tokens vs 65 536 ceiling); csv-parser is the new dominant timeout test (8/8 reps at 240s). Detector widening (`run_row.js`: BadRequestError + InternalServerError + APIError patterns) was load-bearing — 7 of 13 typed overflows surfaced via non-BadRequestError paths. Memory: ~5 GB weights + ~4.5 GB Q8 KV @ 64k ≈ 11 GB on 16 GB tier (tighter than 32k cell E but still ~4-5 GB headroom). KV cache stays Q8 to match prior cells. Sprint 1.19 Sweep 3 origin: cell δ — cell E with ctx 32k→64k, tested whether tier-32 ctx-bump lesson (Sweep 2 cell B1) carried to IQ4_XS at tier-16. See TIER-EVAL-MEMO-20260502-n8-confirm-vs-baseline.md \"Sprint 1.20 closure\"."
+    "notes": "**Tier-16 production (Sprint 1.20, 2026-05-02)** — promoted from sweep-only after Sprint 1.20 t16 harness-error triage. Identical model+sampler to archived `qwen35-9b-iq4xs-ctx32k-v6antiloop-pp01`; only n_ctx changes 32k→64k. Closes the 32k context ceiling that drove 13.5% `BadRequestError` rate in 1.19 confirm (root cause: read→write→reread of large source files pushed conversation past 32k on hot tests like expression-eval, csv-parser, lru-cache). **N=8 64k confirm (208 attempts, `t16-1.20-confirm-n8-iq4xs-64k-20260502-0459`):** 90.8% pass-rate (177/195, harness_error excluded per Layer-A; +6.2 pp vs 1.19 32k baseline), 99.4% done-only (177/178), 6.25% typed harness_error rate (13/208; -7.25 pp), 8.2% timeouts (17/208; +7.7 pp). Failures reshape from typed overflows to wallclock: expression-eval is the dominant residual overflow site (7/8 reps; up to 76 189 tokens vs 65 536 ceiling); csv-parser is the new dominant timeout test (8/8 reps at 240s). Detector widening (`run_row.js`: BadRequestError + InternalServerError + APIError patterns) was load-bearing — 7 of 13 typed overflows surfaced via non-BadRequestError paths. Memory: ~5 GB weights + ~4.5 GB Q8 KV @ 64k ≈ 11 GB on 16 GB tier (tighter than 32k cell E but still ~4-5 GB headroom). KV cache stays Q8 to match prior cells. Sprint 1.19 Sweep 3 origin: cell δ — cell E with ctx 32k→64k, tested whether tier-32 ctx-bump lesson (Sweep 2 cell B1) carried to IQ4_XS at tier-16. See TIER-EVAL-MEMO-20260502-n8-confirm-vs-baseline.md \"Sprint 1.20 closure\". Thinking mode under the harness is OFF (route anthropic/claw-llama overrides the server launch flag enable_thinking:true; verified live on Qwen3.5-9B-IQ4_XS + build b1-5594d13). PRODUCTION claw-16 (anthropic/claw route, no override) is thinking-ON — a documented skew. Issue #017, docs/TIER16-THINKING-PARITY-DECISION.md."
   },
   "qwen35-9b-iq4xs-ctx64k-v7noreppen-pp01": {
     "model_config_id": "qwen35-9b-iq4xs-ctx64k-v7noreppen-pp01",
@@ -473,5 +473,119 @@
     "prompt_pack_version": "pp01",
     "tier_compatibility": [64],
     "notes": "Tier-64 baseline; MoE hybrid attention/SSM, thinking suppressed via litellm route. Sampler v1 per host/llama-server/models.conf TIER_64 block; pending confirmatory n=7 separation between three tied 15/15 cells (see host/test/docs/base/TIER-EVAL-MEMO-20260428-sampler-v2.md)."
+  },
+  "qwen36-35b-a3b-q4kxl-ctx65k-v1prod-pp01-opencode-a": {
+    "model_config_id": "qwen36-35b-a3b-q4kxl-ctx65k-v1prod-pp01-opencode-a",
+    "model_id": "unsloth/Qwen3.6-35B-A3B-GGUF@UD-Q4_K_XL",
+    "model_family": "qwen3.6",
+    "parameter_count": 35000000000,
+    "quantization": "UD-Q4_K_XL",
+    "context_limit": 65536,
+    "runtime_backend": "llama-server@unknown",
+    "sampler_config_id": "v1-prod",
+    "sampler_settings": {
+      "temperature": 0.7,
+      "top_p": 0.8,
+      "top_k": 20,
+      "repeat_penalty": 1.0,
+      "presence_penalty": 1.5,
+      "seed_policy": "per_run"
+    },
+    "harness_version": "d0d46f4",
+    "prompt_pack_version": "pp01",
+    "tier_compatibility": [64],
+    "notes": "**Config B (OpenCode) serving fingerprint for tier-64.** Same weights + sampler as the tier-64 production config `qwen36-35b-a3b-q4kxl-ctx65k-v1prod-pp01` — `model_id` / `quantization` / `context_limit` / `sampler_config_id` are reused verbatim (model, engine, and thinking-mode are equalized across A/B); only the serving provenance differs. **B's serving (OPENCODE-HARNESS-AB-PLAN.md §4.5):** OpenCode → a second, OpenCode-dedicated `llama-server` on its own port, same GGUF, with the corrected Qwen3.6 Jinja chat template (no `claw.gbnf` grammar), native `<tool_call>` emission, and thinking-off via `--chat-template-kwargs` (NOT via a LiteLLM route — that is the A-side's mechanism). Pairs with `config_id=opencode-a` registry rows. A distinct `model_config_id` (vs reusing the production id) keeps every row self-documenting: reusing claw's id would falsely stamp B's rows with claw's litellm/grammar serving note."
+  },
+  "qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-a": {
+    "model_config_id": "qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-a",
+    "model_id": "unsloth/Qwen3.5-9B-GGUF@IQ4_XS",
+    "model_family": "qwen3.5",
+    "parameter_count": 9000000000,
+    "quantization": "IQ4_XS",
+    "context_limit": 65536,
+    "runtime_backend": "llama-server@unknown",
+    "sampler_config_id": "v6-antiloop",
+    "sampler_settings": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.05,
+      "repeat_penalty": 1.1,
+      "presence_penalty": 0,
+      "seed_policy": "per_run"
+    },
+    "harness_version": "d0d46f4",
+    "prompt_pack_version": "pp01",
+    "tier_compatibility": [16],
+    "notes": "**Config B (OpenCode) serving fingerprint for tier-16.** Same weights + sampler as the tier-16 production config `qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01` (Sprint 1.20) — `model_id` / `quantization` / `context_limit` / `sampler_config_id` are reused verbatim (model, engine, and thinking-mode are equalized across A/B); only the serving provenance differs. **B's serving (OPENCODE-HARNESS-AB-PLAN.md §4.5):** OpenCode → a second, OpenCode-dedicated `llama-server` on its own port, same GGUF, with the corrected Qwen3.5 Jinja chat template (no `claw.gbnf` grammar), native `<tool_call>` emission, and thinking-off via `--chat-template-kwargs enable_thinking=false` (NOT via a LiteLLM route — that is the A-side's mechanism; matches harness claw-16 thinking-off per issue #017 / docs/TIER16-THINKING-PARITY-DECISION.md — and because B has no `claw.gbnf` backstop, #018 MUST verify the closed think-block prefill via /apply-template). Pairs with `config_id=opencode-a` registry rows. A distinct `model_config_id` (vs reusing the production id) keeps every row self-documenting: reusing claw's id would falsely stamp B's rows with claw's litellm/grammar serving note."
+  },
+  "qwen35-9b-q5kxl-ctx64k-v7noreppen-pp01-opencode-a": {
+    "model_config_id": "qwen35-9b-q5kxl-ctx64k-v7noreppen-pp01-opencode-a",
+    "model_id": "unsloth/Qwen3.5-9B-GGUF@UD-Q5_K_XL",
+    "model_family": "qwen3.5",
+    "parameter_count": 9000000000,
+    "quantization": "UD-Q5_K_XL",
+    "context_limit": 65536,
+    "runtime_backend": "llama-server@unknown",
+    "sampler_config_id": "v7-noreppen",
+    "sampler_settings": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.05,
+      "repeat_penalty": 1.0,
+      "presence_penalty": 0,
+      "seed_policy": "per_run"
+    },
+    "harness_version": "d0d46f4",
+    "prompt_pack_version": "pp01",
+    "tier_compatibility": [32],
+    "notes": "**OpenCode serving fingerprint for tier-32 (issue #011 / migration decision §2.7).** Same weights + sampler as the tier-32 production config `qwen35-9b-q5kxl-ctx64k-v7noreppen-pp01` (Sprint 1.19 B2) — `model_id` / `quantization` / `context_limit` / `sampler_config_id` reused verbatim; only the serving provenance differs: the OpenCode-dedicated llama-server on :11438 (OPENCODE_TIER=32, on-demand only — no launchd plist by design, decision §2.5), corrected Qwen3.5 Jinja template (qwen35-corrected.jinja, system-not-first fix), native tool_calls (no claw.gbnf — claw stack retired #008/#010, tag claw-stack-final), thinking-off via `--chat-template-kwargs enable_thinking=false` (closed <think></think> prefill verified via /apply-template per the #018 gotcha). Pairs with `config_id=opencode-a` (and the serving-identical `opencode-a+git`) registry rows. **SCOPE (decision §4): tier-32 carries NO comparative data — adopted by extrapolation from tier-16 (same 9B); rows under this fingerprint are serving validation only, not a comparative claim.**"
+  },
+  "qwen35-9b-q5kxl-ctx64k-v7noreppen-pp01-opencode-prompt": {
+    "model_config_id": "qwen35-9b-q5kxl-ctx64k-v7noreppen-pp01-opencode-prompt",
+    "model_id": "unsloth/Qwen3.5-9B-GGUF@UD-Q5_K_XL",
+    "model_family": "qwen3.5",
+    "parameter_count": 9000000000,
+    "quantization": "UD-Q5_K_XL",
+    "context_limit": 65536,
+    "runtime_backend": "llama-server@unknown",
+    "sampler_config_id": "v7-noreppen",
+    "sampler_settings": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.05,
+      "repeat_penalty": 1.0,
+      "presence_penalty": 0,
+      "seed_policy": "per_run"
+    },
+    "harness_version": "d0d46f4",
+    "prompt_pack_version": "pp01+agentsmd-v1",
+    "tier_compatibility": [32],
+    "notes": "**`+prompt` fingerprint for tier-32 (issue #011).** Serving is byte-identical to `qwen35-9b-q5kxl-ctx64k-v7noreppen-pp01-opencode-a` (same OpenCode-dedicated llama-server :11438, corrected Qwen3.5 Jinja template, native tool_calls, thinking-off); the ONLY delta is the prompt pack: `host/llama-server/docs/system-prompt.md` (tool-use discipline rules) planted VERBATIM as a git-committed `AGENTS.md` in /workspace before each run, which OpenCode injects via project-rules discovery (OPENCODE-SIDECAR-PORT-HANDOFF.md §4 — same mechanism as the tier-16 `+prompt` arm). Pairs with `config_id=opencode-a+prompt` rows. The git-init-only control arm `opencode-a+git` deliberately REUSES the plain `...-opencode-a` fingerprint. **SCOPE (decision §4): tier-32 carries NO comparative data — adopted by extrapolation from tier-16 (same 9B); rows under this fingerprint are serving validation only, not a comparative claim.**"
+  },
+  "qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-prompt": {
+    "model_config_id": "qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-prompt",
+    "model_id": "unsloth/Qwen3.5-9B-GGUF@IQ4_XS",
+    "model_family": "qwen3.5",
+    "parameter_count": 9000000000,
+    "quantization": "IQ4_XS",
+    "context_limit": 65536,
+    "runtime_backend": "llama-server@unknown",
+    "sampler_config_id": "v6-antiloop",
+    "sampler_settings": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.05,
+      "repeat_penalty": 1.1,
+      "presence_penalty": 0,
+      "seed_policy": "per_run"
+    },
+    "harness_version": "d0d46f4",
+    "prompt_pack_version": "pp01+agentsmd-v1",
+    "tier_compatibility": [16],
+    "notes": "**Sidecar-port `+prompt` fingerprint for tier-16 (OPENCODE-SIDECAR-PORT-HANDOFF.md §4).** Serving is byte-identical to `qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-a` (same OpenCode-dedicated llama-server :11437, corrected Qwen3.5 Jinja template, native tool_calls, thinking-off); the ONLY delta is the prompt pack: claw's `host/llama-server/docs/system-prompt.md` (tool-use discipline rules) is planted VERBATIM as a git-committed `AGENTS.md` in /workspace before each run, which OpenCode injects via its project-rules discovery (requires a git root — handoff §2). Pairs with `config_id=opencode-a+prompt` rows. The git-init-only control arm `opencode-a+git` deliberately REUSES the plain `...-opencode-a` fingerprint (its serving and prompt pack are unchanged; the git-init is harness-side provenance carried by config_id). The grammar half of the original sidecar idea is dead: `claw.gbnf` as a global --grammar-file is silently overridden whenever the request carries `tools` on the --jinja path (handoff §1) — this arm is prompt-only by design."
   }
 }

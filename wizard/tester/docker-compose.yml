@@ -4,10 +4,8 @@ services:
     image: wizard-tester:local
     network_mode: bridge
     environment:
-      - BRIDGE_HOST=${BRIDGE_HOST:-host.docker.internal}
-      - BRIDGE_PORT=${BRIDGE_PORT:-4000}
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-}
-      - MODE=${MODE:-models}
+      - HOST_GATEWAY=${HOST_GATEWAY:-host.docker.internal}
+      - MODE=${MODE:-docker}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

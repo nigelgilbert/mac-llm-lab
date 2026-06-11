@@ -5,11 +5,16 @@
 // each tier-eval test file.
 //
 // Inputs:
-//   - clawResult: the object returned by runClaw() in lib/claw.js (has runId,
-//     runDir, iterationsPath, runSummaryPath, code, elapsedMs, etc).
+//   - clawResult: a RunnerResult-shaped object as returned by a runner (today
+//     lib/opencode.js runOpenCode; historically the retired claw runner —
+//     hence the parameter name): runId, runDir, iterationsPath,
+//     runSummaryPath, code, elapsedMs, etc.
 //   - ctx: caller-supplied registry context — at minimum:
-//       run_kind, hardware_tier, memory_gb, model_config_id,
+//       run_kind, hardware_tier, memory_gb, config_id, model_config_id,
 //       test_id, test_version, oracle_type, harness_version
+//     config_id (the coarse A/B bundle label) is REQUIRED with no default
+//     (issue #009): the live path supplies it via resolveConfigId(); the
+//     offline harvester supplies it via its required --config-id flag.
 //     Optional fields: canonical_status (default 'canonical'),
 //       seed, prompt_pack_version, screening_only, iteration_budget,
 //       timeout_budget_ms, manifestPath (override for model-config lookup),
@@ -58,6 +63,21 @@ export function assembleRow(clawResult, ctx) {
       throw new RunRowAssemblyError(`ctx.${k} is required`);
     }
   }
+  // Issue #009: config_id (the coarse A/B bundle label) is REQUIRED — no
+  // 'claw-rig' default. Minting the historical baseline label by omission is
+  // exactly how an offline-recovered opencode run lands on the wrong side of
+  // the A/B (it passes the pairing gate's enum check and buckets as baseline).
+  // 'claw-rig' stays in the schema enum for the preserved historical
+  // registries; it just can never again be stamped implicitly. The live path
+  // supplies config_id via resolveConfigId(); the offline harvester via its
+  // required --config-id flag.
+  if (ctx.config_id === undefined || ctx.config_id === null || ctx.config_id === '') {
+    throw new RunRowAssemblyError(
+      "ctx.config_id is required (no 'claw-rig' default — issue #009): pass the "
+      + "run's coarse bundle label explicitly (live path: resolveConfigId(); "
+      + 'offline harvest: --config-id).',
+    );
+  }
 
   const runId = clawResult.runId;
   if (!runId) throw new RunRowAssemblyError('clawResult.runId is required');
@@ -79,11 +99,17 @@ export function assembleRow(clawResult, ctx) {
   const start_time = isoFromMs(summary?.run_started_ms);
   const end_time = isoFromMs(summary?.run_finished_ms);
 
-  // Sprint 1.20: if claw exited non-zero AND the per-run bridge slice carries a
-  // typed context-overflow failure from LiteLLM, relabel as harness_error so
-  // the row drops out of pass-rate denominators per the schema's Layer-A
-  // discipline (run_registry.schema.json's `terminal_status` description).
-  const upstreamFailure = detectUpstreamFailure(clawResult.runDir);
+  // #002 (Option A, decision 2026-06-10): a mid-run llama-server context
+  // overflow is re-typed harness_error so the row drops out of pass-rate
+  // denominators per the schema's Layer-A discipline (run_registry.schema.json
+  // `terminal_status` description). The signal is the sidecar's
+  // `context_overflow` flag, set from the pinned llama-server n_ctx-exceeded
+  // log line in the run's capture window — by the transcript build in-run
+  // (lib/opencode_transcript.js, OPENCODE_SERVER_TIMINGS=1) or by the driver's
+  // post-arm host-slice patch (scripts/patch-context-overflow.mjs) when
+  // virtiofs froze the in-container view. This replaces the retired claw-era
+  // bridge-slice detector (its LiteLLM-side writers died with the claw stack).
+  const upstreamFailure = detectContextOverflow(summary);
 
   const terminal_status = pickTerminalStatus(clawResult, summary, upstreamFailure);
   const passed = pickPassed(assertion, summary, terminal_status);
@@ -96,6 +122,9 @@ export function assembleRow(clawResult, ctx) {
     canonical_status: ctx.canonical_status ?? 'canonical',
     hardware_tier: ctx.hardware_tier,
     memory_gb: ctx.memory_gb,
+    // Coarse bundle label (issue #002). Always threaded from run context;
+    // required with no default since issue #009 (guard above).
+    config_id: ctx.config_id,
     model_config_id: ctx.model_config_id,
     model_id: config.model_id,
     quantization: config.quantization,
@@ -115,6 +144,18 @@ export function assembleRow(clawResult, ctx) {
     passed,
     harness_error,
     iters_count: iterRecords.length,
+    // #010 (decision 2026-06-10): tool-call telemetry promoted verbatim from
+    // the run_summary sidecar (computed by lib/opencode_transcript.js). Drift
+    // telemetry ONLY — no threshold, no exclusion rule, no eligibility effect
+    // (paired_bootstrap.isEligible ignores unknown row fields, #012); the
+    // threshold decision is deferred to issue #018. Null whenever the sidecar
+    // carries no counters: historical claw-rig rows, outcome-only/degraded
+    // runs, and absent sidecars all stay valid. truncated_tool_call_count
+    // (#017) preserves the censoring-aware split — in-flight parts at
+    // hard-kill are truncation, NOT tool errors.
+    tool_call_count: countOrNull(summary?.tool_call_count),
+    error_tool_call_count: countOrNull(summary?.error_tool_call_count),
+    truncated_tool_call_count: countOrNull(summary?.truncated_tool_call_count),
     trace_artifact_uri: clawResult.runDir ?? null,
     screening_only: ctx.screening_only ?? (ctx.run_kind === 'overnight_screen'),
   };
@@ -158,21 +199,25 @@ function isoFromMs(ms) {
   return new Date(ms).toISOString();
 }
 
+// #010 telemetry promotion: a counter is only a counter — accept non-negative
+// integers verbatim (including 0, which is a real observation, not "absent");
+// anything else (missing field, null, strings, floats, negatives from a
+// corrupt sidecar) maps to null so the row stays schema-valid and the absence
+// is distinguishable downstream (#018 reads null as "no telemetry").
+function countOrNull(v) {
+  return Number.isInteger(v) && v >= 0 ? v : null;
+}
+
 function pickTerminalStatus(clawResult, summary, upstreamFailure) {
-  // Sprint 1.20: a claw exit-non-zero attributable to a typed upstream failure
-  // (e.g. llama-server context-overflow rejection surfaced as LiteLLM
-  // BadRequestError) is harness-side, not test-content. Relabel before the
-  // generic 'error' bucketing so Layer-A pass-rate denominators stay clean.
-  //
-  // Gate on claw exit != 0: a transient upstream failure that claw recovered
-  // from (e.g. mid-run BadRequestError followed by a successful retry → claw
-  // exits 0) is not a harness failure of the run; only kill-the-run failures
-  // get the harness_error label.
-  if (upstreamFailure
-      && !clawResult.timeout
-      && !clawResult.signal
-      && typeof clawResult.code === 'number'
-      && clawResult.code !== 0) {
+  // #002: a typed upstream failure (llama-server context overflow in the run's
+  // capture window) is harness-side, not test-content. Relabel before the
+  // generic bucketing so Layer-A pass-rate denominators stay clean. The
+  // recovered-run carve-out (overflow line present but the run finished clean
+  // → NOT a kill-the-run failure → no relabel) lives in detectContextOverflow,
+  // so a non-null upstreamFailure here is always relabel-worthy — including
+  // the documented tier-16 shape where the overflow burns the wall-clock and
+  // the sidecar says 'timeout' (the claw-era exit-code gate would miss it).
+  if (upstreamFailure) {
     return 'harness_error';
   }
   if (summary?.terminal_status && TERMINAL_STATUS_ALLOWED.has(summary.terminal_status)) {
@@ -191,41 +236,27 @@ function pickPassed(assertion, summary, terminal_status) {
   return null;
 }
 
-// Sprint 1.20: per-run upstream-failure detector. Reads the bridge slice
-// (claw.js:collectRunArtifacts copies the time-windowed _bridge.jsonl segment
-// into <runDir>/bridge.iterations.jsonl) and types the failure from LiteLLM's
-// callback metadata captured by host/litellm/callbacks/iter_distribution_logger.py.
+// #002 per-run context-overflow detector (Option A, decision 2026-06-10).
+// Reads the run_summary sidecar's `context_overflow` flag — the opencode-native
+// successor to the retired claw-era bridge-slice detector (which parsed
+// LiteLLM failure classes out of the per-run bridge slice; its writers died
+// with the claw stack, tag claw-stack-final). The flag's oracle is the pinned
+// llama-server n_ctx-exceeded log line scanned out of the run's per-run
+// capture window (lib/opencode_server_timings.js CONTEXT_OVERFLOW_RE), set by:
+//   - the in-run transcript build when the window was readable in-container
+//     (context_overflow_detected_via: 'in_run_capture'), or
+//   - the driver's post-arm host-slice patch when virtiofs froze the
+//     in-container view (context_overflow_detected_via: 'host_slice_post_arm';
+//     scripts/patch-context-overflow.mjs, run-config-ab.sh).
 //
-// Patterns:
-//   - context_overflow: BadRequestError + message including
-//     "exceeds the available context size" — n_ctx ceiling at llama-server.
-// Future: other failure_class patterns get their own harness_error label here.
+// Recovered-run carve-out: an overflow line in the window on a run that still
+// finished clean ('done') means the client recovered (compaction/retry) — the
+// overflow is recorded on the sidecar but the run is NOT a kill-the-run
+// failure, so no relabel (the workspace oracle decides pass/fail).
 //
-// Returns null when no record is typed; otherwise { harness_error: 'context_overflow' }.
-function detectUpstreamFailure(runDir) {
-  if (!runDir) return null;
-  const slicePath = path.join(runDir, 'bridge.iterations.jsonl');
-  if (!fs.existsSync(slicePath)) return null;
-  for (const line of fs.readFileSync(slicePath, 'utf8').split('\n')) {
-    const t = line.trim();
-    if (!t) continue;
-    let rec;
-    try { rec = JSON.parse(t); } catch { continue; }
-    if (!rec.stream_aborted) continue;
-    // BadRequestError → llama-server's typed pre-decode rejection.
-    // InternalServerError / APIError → same root cause surfaced as a
-    // streaming "Context size has been exceeded" mid-decode (observed in
-    // Sprint 1.20 N=8 confirm, expression-eval at 64k). Both are upstream-
-    // bound context-overflow; relabel both as harness_error.
-    if (typeof rec.failure_message_tail !== 'string') continue;
-    if (rec.failure_class === 'BadRequestError'
-        && rec.failure_message_tail.includes('exceeds the available context size')) {
-      return { harness_error: 'context_overflow' };
-    }
-    if ((rec.failure_class === 'InternalServerError' || rec.failure_class === 'APIError')
-        && rec.failure_message_tail.includes('Context size has been exceeded')) {
-      return { harness_error: 'context_overflow' };
-    }
-  }
-  return null;
+// Returns null when no relabel applies; otherwise { harness_error: 'context_overflow' }.
+function detectContextOverflow(summary) {
+  if (!summary || summary.context_overflow !== true) return null;
+  if (summary.terminal_status === 'done') return null; // recovered, not killed
+  return { harness_error: 'context_overflow' };
 }

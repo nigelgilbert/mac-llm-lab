@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mac-llm-lab.opencode-server-16</string>
+
+    <!--
+      TIER-16 OpenCode-dedicated llama-server (Config B, issue #018).
+      Sibling of com.mac-llm-lab.opencode-server (tier-64, #005) — same shape,
+      tier-16 identity. Serves Qwen3.5-9B-IQ4_XS for the tier-16 OpenCode A/B.
+
+      This is the LOGIN-PERSISTENT option only. The canonical, phase-swap-friendly
+      interface is the direct-boot control script:
+          OPENCODE_TIER=16 ./host/llama-server/scripts/opencode-server {start|stop|status|health|probe}
+      Render + bootstrap this plist with:
+          OPENCODE_TIER=16 ./host/llama-server/scripts/opencode-server install   (fills placeholders, XML-escaped — #029)
+      Do NOT install by hand — placeholders are filled from models.conf tier-16.
+
+      Distinct from the production claw plist AND the tier-64 OpenCode plist:
+        - own Label + own port (:11437, vs claw :11435, LiteLLM :4000, opencode-64 :11436)
+        - --jinja + the corrected Qwen3.5 template (#018), NO grammar file
+        - thinking-off via --chat-template-kwargs '{"enable_thinking":false}' (#017)
+        - generous -n so tool-call args don't truncate
+        - own log path, so it never clobbers claw's or opencode-64's log
+      Because the Label + port differ, bootstrapping/booting-out this agent NEVER
+      disturbs the claw launchd instance or the tier-64 OpenCode server.
+
+      Placeholders (filled by `OPENCODE_TIER=16 opencode-server install`):
+        __BINARY__ __GGUF_PATH__ __TEMPLATE_PATH__ __CTX_SIZE__ __BATCH_SIZE__
+        __NPREDICT__ __TEMP__ __TOP_P__ __TOP_K__ __REPEAT_PENALTY__ __PRESENCE_PENALTY__
+      Port/host are deliberately NOT placeholders: the launchd identity is fixed
+      at the tier defaults (:11437 on 0.0.0.0), and `install` refuses
+      OPENCODE_LLAMA_PORT/HOST overrides pre-bootstrap (#005 render/poll parity).
+      Overrides remain available on the direct-boot `start` path.
+    -->
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__BINARY__</string>
+
+        <!-- network — own port; 0.0.0.0 so docker reaches via host.docker.internal -->
+        <string>--host</string>
+        <string>0.0.0.0</string>
+        <string>--port</string>
+        <string>11437</string>
+
+        <!-- model — tier-16 GGUF (Qwen3.5-9B-IQ4_XS) -->
+        <string>--model</string>
+        <string>__GGUF_PATH__</string>
+        <string>--alias</string>
+        <string>opencode-16</string>
+
+        <!-- context + memory — mirrors the claw plist -->
+        <string>--ctx-size</string>
+        <string>__CTX_SIZE__</string>
+        <string>-ngl</string>
+        <string>999</string>
+        <string>-fa</string>
+        <string>on</string>
+        <string>--cache-type-k</string>
+        <string>q8_0</string>
+        <string>--cache-type-v</string>
+        <string>q8_0</string>
+        <string>--batch-size</string>
+        <string>__BATCH_SIZE__</string>
+
+        <!-- sampler — tier-16 values from models.conf (same as claw tier-16) -->
+        <string>--temp</string>
+        <string>__TEMP__</string>
+        <string>--top-p</string>
+        <string>__TOP_P__</string>
+        <string>--top-k</string>
+        <string>__TOP_K__</string>
+        <string>--repeat-penalty</string>
+        <string>__REPEAT_PENALTY__</string>
+        <string>--presence-penalty</string>
+        <string>__PRESENCE_PENALTY__</string>
+        <string>--repeat-last-n</string>
+        <string>256</string>
+
+        <!-- Config B serving — corrected Qwen3.5 template + native <tool_call>, NO grammar.
+             Deliberately omits claw's --grammar-file. -->
+        <string>--jinja</string>
+        <string>--chat-template-file</string>
+        <string>__TEMPLATE_PATH__</string>
+
+        <!-- thinking-off (#017). --chat-template-kwargs is deprecated-but-functional on
+             build 5594d13 (warning only); kept for parity with the setup-guide
+             recipe. --reasoning off is the startup-only alternative. -->
+        <string>--chat-template-kwargs</string>
+        <string>{"enable_thinking":false}</string>
+
+        <!-- generous n-predict: avoid tool-call arg truncation -->
+        <string>-n</string>
+        <string>__NPREDICT__</string>
+
+        <!-- misc -->
+        <string>--metrics</string>
+    </array>
+
+    <!-- Auto-start at login; revive on crash or unsuccessful exit (#029).
+         The old unconditional KeepAlive=true + ThrottleInterval=10 made a
+         stale GGUF path respawn a multi-GB load attempt every ~10 s forever
+         into an unrotated /tmp log. Conditional KeepAlive restarts only
+         after a crash (signal) or a non-zero exit — never after a clean
+         exit — and ThrottleInterval=60 caps a config-broken daemon at one
+         attempt per minute. Recover: fix models.conf, then re-run
+         `OPENCODE_TIER=16 opencode-server install`. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Own log path — never clobbers claw's or opencode-64's log. -->
+    <key>StandardOutPath</key>
+    <string>/tmp/opencode-llama-server-16.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/opencode-llama-server-16.log</string>
+
+    <!-- Respawn backoff (#029): at most one restart attempt per 60 s. -->
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+</dict>
+</plist>

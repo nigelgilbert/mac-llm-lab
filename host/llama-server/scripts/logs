@@ -1,6 +1,0 @@
-#!/usr/bin/env sh
-# logs — tail the llama-server log (path mirrors the LaunchAgent plist).
-set -eu
-LOG="/tmp/llama-server.log"
-[ -f "$LOG" ] || { echo "no log yet: $LOG" >&2; exit 1; }
-exec tail -f "$LOG"

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "autoupdate": false,
+  "provider": {
+    "llama-local": {
+      "name": "Qwen3.5-9B Q5_K_XL (llama.cpp, tier-32 on-demand)",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://host.docker.internal:11438/v1",
+        "apiKey": "sk-local-no-auth"
+      },
+      "models": {
+        "opencode": {
+          "name": "Qwen3.5 9B Q5_K_XL (tier-32, server alias: opencode-32)"
+        }
+      }
+    }
+  },
+  "model": "llama-local/opencode"
+}

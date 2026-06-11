@@ -11,6 +11,7 @@
     "canonical_status",
     "hardware_tier",
     "memory_gb",
+    "config_id",
     "model_config_id",
     "test_id",
     "test_version",
@@ -58,6 +59,16 @@
       "type": "integer",
       "minimum": 1,
       "description": "Physical memory of the machine that produced this row. Should match hardware_tier for canonical rows."
+    },
+    "config_id": {
+      "type": "string",
+      "enum": [
+        "claw-rig",
+        "opencode-a",
+        "opencode-a+git",
+        "opencode-a+prompt"
+      ],
+      "description": "Coarse bundle label grouping rows by serving/harness stack before any data is collected (OPENCODE-HARNESS-AB-PLAN.md §4.5). `claw-rig` is the established claw + llama-server stack; `opencode-a` is the opencode harness bundle (bare workspace). `opencode-a+git` / `opencode-a+prompt` are the tier-16 sidecar-port arms (OPENCODE-SIDECAR-PORT-HANDOFF.md §4): both git-initialize /workspace (OpenCode rules discovery no-ops in a bare dir); `+prompt` additionally plants claw's system-prompt.md as a committed AGENTS.md. Complementary to — not a replacement for — `model_config_id`, which is the fine-grained serving fingerprint."
     },
     "model_config_id": {
       "type": "string",
@@ -154,6 +165,21 @@
       "type": "integer",
       "minimum": 0,
       "description": "Sprint 1.16 enrichment. Count of records in iterations.jsonl for the run — i.e., number of LLM iterations claw made before terminating. Combined with end_time-start_time gives Sprint 2's p90 iters/wallclock §8 column. Zero when the iterations.jsonl is empty or absent (e.g., very early aborts)."
+    },
+    "tool_call_count": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Issue #010 (decision 2026-06-10) tool-call drift telemetry, promoted verbatim from the run_summary sidecar (lib/opencode_transcript.js): total tool calls observed in the run's transcript. Telemetry ONLY — no threshold, no exclusion rule (threshold review deferred to issue #018; the Layer-A admission gate is the wire-level probe battery in opencode-server probe). Null when the sidecar carries no counters: historical claw-rig rows, outcome-only/degraded runs."
+    },
+    "error_tool_call_count": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Issue #010 telemetry: tool calls whose EXECUTION errored (part status != completed, bash exit != 0) — behavioral data (failing builds/tests are normal agent work, ~18.3% of calls historically), NOT a parse-health gate input. Truncated calls on censored runs are excluded (#017). Null when the sidecar carries no counters."
+    },
+    "truncated_tool_call_count": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Issue #017 (promoted by #010): tool parts still pending/running at hard-kill on a censored run — truncation, not tool failure; disjoint from error_tool_call_count so censored-run drift telemetry stays honest. Zero on non-censored runs with telemetry; null when the sidecar carries no counters."
     },
     "trace_artifact_uri": {
       "type": ["string", "null"],

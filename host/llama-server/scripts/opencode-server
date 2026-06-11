@@ -1,0 +1,502 @@
+#!/usr/bin/env bash
+# ============================================================================
+# opencode-server — start/stop/health for the OpenCode-dedicated llama-server
+# (Config B of the OpenCode A/B plan; post-migration-decision: the production
+# OpenCode serving layer). TIER-PARAMETERIZED:
+#   OPENCODE_TIER=64  (default) — tier-64 Qwen3.6-35B-A3B,  resident, #005
+#   OPENCODE_TIER=16            — tier-16 Qwen3.5-9B IQ4_XS,           #018
+#   OPENCODE_TIER=32            — tier-32 Qwen3.5-9B Q5_K_XL, on-demand only
+# Ports/labels/log tags come from ../tiers.conf (#016) — the ONE tier table.
+#
+# ROLES (migration decision §2.5 / issue #002):
+#   tier-64 — RESIDENT. The login-persistent daily serving daemon under
+#     launchd (`opencode-server install`), playing the role claw's :11435
+#     plays today. MEMORY BUDGET: the 35B-A3B GGUF is ~21 GB resident; until
+#     #008 guts the claw stack it co-resides with claw's identical-weights
+#     server on :11435 (~21 GB more), i.e. ~42 GB of weights + KV on the
+#     64 GB box. This is the accepted interim cost of build→prove→gut; #008
+#     reclaims it.
+#   tier-16 / tier-32 — ON-DEMAND. Boot via `OPENCODE_TIER=N opencode-server
+#     start`, stop after use. (tier-32 is the same 9B at Q5_K_XL — adopted by
+#     extrapolation, decision §2.7; no plist, on-demand only.)
+#
+# Serves the SAME per-tier GGUF as the production claw server, but with
+# OpenCode's serving config:
+#   --jinja + the vendored corrected template (system-not-first fix)
+#       tier-64 → qwen36-corrected.jinja (#004); tier-16 → qwen35-corrected.jinja (#018)
+#   NO grammar file  (Config B uses native <tool_call> parsing)
+#   thinking-off via --chat-template-kwargs '{"enable_thinking":false}' (#017)
+#   per-tier sampler (mirrored from models.conf TIER_${TIER}_*)
+#   generous -n so tool-call args don't truncate
+#
+# Each tier runs on its OWN port and as its OWN background process (own log,
+# pidfile, alias, launchd label), so it NEVER touches the production claw
+# launchd on :11435, LiteLLM on :4000, or the OTHER OpenCode tier's server.
+# Start/stop is fully scriptable (no interactive steps) for the phase-swap
+# driver (#013).
+#
+# Usage:
+#   ./scripts/opencode-server start      # boot in background, wait for /health
+#   ./scripts/opencode-server stop       # kill the background process
+#   ./scripts/opencode-server restart
+#   ./scripts/opencode-server status     # pid + /health
+#   ./scripts/opencode-server health     # exit 0 iff /health is green
+#   ./scripts/opencode-server probe      # /apply-template: assert the #004 fix
+#                                        #   + closed <think></think> prefill
+#                                        #   + LIVE tool-call battery (#010
+#                                        #   Layer-A admission gate: N/N parsed
+#                                        #   tool_calls, zero naked-XML leaks)
+#   ./scripts/opencode-server install    # render+bootstrap the launchd plist for
+#                                        #   login-persistent serving, then wait
+#                                        #   for green /health (tier-64: the
+#                                        #   resident daily daemon; tier-16 also
+#                                        #   has a plist; tier-32 is on-demand only)
+#                                        #   then run the canonical probe (#010
+#                                        #   admission gate) against the daemon
+#   ./scripts/opencode-server uninstall  # bootout + remove the rendered plist
+#
+# The boot incantation mirrors the known-good non-grammar boot in
+# templates/verify-template.sh (same build, 5594d13).
+# ============================================================================
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$SCRIPT_DIR/.."
+
+# --- Per-tier identity for this dedicated server (#016: ONE tier table) ----
+# OPENCODE_TIER selects which tier this invocation serves. Each tier gets its
+# own port/alias/template/log/pidfile/launchd-label so the two OpenCode servers
+# (and any other resident server) coexist without ever colliding. The identity
+# values come from ../tiers.conf — the single tier table every consumer
+# (oc, sweep driver, wizard, this launcher, the JS timings lib) resolves; no
+# private case map here, so the copies can never drift again.
+# shellcheck source=../tiers.conf
+source "$ROOT/tiers.conf"
+TIER="${OPENCODE_TIER:-$TIER_DEFAULT}"
+if ! tier_resolve "$TIER"; then
+  echo "ERROR: unsupported OPENCODE_TIER=$TIER (known tiers: $TIERS_ALL — see tiers.conf)" >&2
+  exit 1
+fi
+DEF_PORT="$TIER_PORT"
+DEF_ALIAS="$TIER_ALIAS"
+DEF_TEMPLATE="$TIER_TEMPLATE"
+TAG="$TIER_LOG_TAG"
+
+PORT="${OPENCODE_LLAMA_PORT:-$DEF_PORT}"   # own port; avoids LiteLLM :4000, other tier
+HOST_BIND="${OPENCODE_LLAMA_HOST:-0.0.0.0}"  # 0.0.0.0 so docker reaches via host.docker.internal
+ALIAS="${OPENCODE_LLAMA_ALIAS:-$DEF_ALIAS}"
+BASE="http://127.0.0.1:$PORT"
+BINARY="${LLAMA_SERVER:-$HOME/.local/bin/llama-server}"
+TEMPLATE="${OPENCODE_LLAMA_TEMPLATE:-$ROOT/templates/$DEF_TEMPLATE}"
+LOG="${OPENCODE_LLAMA_LOG:-$TIER_LOG_PATH}"
+PIDFILE="${OPENCODE_LLAMA_PIDFILE:-${OPENCODE_LOG_BASE}${TAG}.pid}"
+NPREDICT="${OPENCODE_LLAMA_NPREDICT:-8192}"   # generous -n: avoid tool-call arg truncation
+HEALTH_TIMEOUT="${OPENCODE_LLAMA_HEALTH_TIMEOUT:-180}"  # model load (21 GB tier-64 slowest)
+STOP_TIMEOUT="${OPENCODE_LLAMA_STOP_TIMEOUT:-30}"  # SIGTERM grace before SIGKILL (multi-GB unload)
+
+# The OPENCODE_USE_GRAMMAR knob (hybrid "opencode-a+grammar" ablation arm) was
+# REMOVED with the retired grammar arm (#005 cleanup): the GBNF it pointed at
+# was deleted with the claw stack (tag claw-stack-final), and the knob was
+# validated but never rendered into the launchd plists. Config B serves with
+# native --jinja <tool_call> parsing only — no grammar file, ever.
+
+# launchd (optional, login-persistent path) — label from the tier table.
+# tiers.conf "-" = NO launchd path by design (on-demand-only tier, e.g. 32):
+# LABEL stays empty and install/uninstall/launchd_state refuse/no-op on it.
+if [[ "$TIER_LAUNCHD_LABEL" == "-" ]]; then LABEL=""; else LABEL="$TIER_LAUNCHD_LABEL"; fi
+PLIST_TEMPLATE="${LABEL:+$ROOT/launchd/$LABEL.plist}"
+PLIST_DEST="${LABEL:+$HOME/Library/LaunchAgents/$LABEL.plist}"
+
+# --- per-tier sampler + ctx/batch from models.conf (the MODEL table; tier
+# --- IDENTITY — port/config/label/log — lives in tiers.conf, #016) ----------
+# shellcheck source=../models.conf
+source "$ROOT/models.conf"
+eval "GGUF=\"\$TIER_${TIER}_GGUF\""
+eval "CTX=\"\$TIER_${TIER}_CTX\""
+eval "BATCH=\"\$TIER_${TIER}_BATCH\""
+eval "TEMP=\"\$TIER_${TIER}_TEMP\""
+eval "TOP_P=\"\$TIER_${TIER}_TOP_P\""
+eval "TOP_K=\"\$TIER_${TIER}_TOP_K\""
+eval "REPEAT_PENALTY=\"\$TIER_${TIER}_REPEAT_PENALTY\""
+eval "PRESENCE_PENALTY=\"\$TIER_${TIER}_PRESENCE_PENALTY\""
+
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+# --- per-tier lifecycle lock (#029) -----------------------------------------
+# Two concurrent `start`s (plausible: `oc -t 16` and the sweep driver both
+# auto-boot on-demand tiers) can both pass the pidfile+lsof preflight; the
+# loser then clobbers the winner's pidfile, leaving the live server
+# unmanageable. Serialize every MUTATING lifecycle command (start/stop/
+# restart/install/uninstall — status/health/probe stay lock-free) behind the
+# same atomic mkdir-lock pattern proven in rotate-opencode-server-log.sh (G3),
+# extended with an owner-pid record so a crashed invocation's lock can be
+# reclaimed instead of wedging the tier forever.
+LIFECYCLE_LOCK="${OPENCODE_LLAMA_LOCK_DIR:-${OPENCODE_LOG_BASE}${TAG}.lifecycle.lock.d}"
+_LIFECYCLE_LOCK_HELD=0
+release_lifecycle_lock() {
+  if [[ "$_LIFECYCLE_LOCK_HELD" == 1 ]]; then
+    rm -f "$LIFECYCLE_LOCK/pid"; rmdir "$LIFECYCLE_LOCK" 2>/dev/null || true
+    _LIFECYCLE_LOCK_HELD=0
+  fi
+  return 0
+}
+acquire_lifecycle_lock() {
+  local attempt owner mt age
+  for attempt in 1 2; do
+    if mkdir "$LIFECYCLE_LOCK" 2>/dev/null; then
+      echo $$ > "$LIFECYCLE_LOCK/pid"
+      _LIFECYCLE_LOCK_HELD=1
+      trap release_lifecycle_lock EXIT
+      return 0
+    fi
+    owner="$(cat "$LIFECYCLE_LOCK/pid" 2>/dev/null || true)"
+    if [[ "$owner" =~ ^[0-9]+$ ]]; then
+      kill -0 "$owner" 2>/dev/null && break   # live owner — genuine contention
+      echo "  reclaiming stale lifecycle lock (owner pid $owner is gone): $LIFECYCLE_LOCK" >&2
+    else
+      # No owner recorded: either a holder inside the µs mkdir→pid-write
+      # window, or a crash exactly there. Only reclaim a demonstrably old
+      # (>60 s) lock — never a freshly created one.
+      mt="$(stat -f %m "$LIFECYCLE_LOCK" 2>/dev/null || echo 0)"
+      age=$(( $(date +%s) - mt ))
+      [[ "$age" -gt 60 ]] || break
+      echo "  reclaiming abandoned lifecycle lock (no owner recorded, ${age}s old): $LIFECYCLE_LOCK" >&2
+    fi
+    rm -f "$LIFECYCLE_LOCK/pid"; rmdir "$LIFECYCLE_LOCK" 2>/dev/null || true
+  done
+  die "another opencode-server lifecycle operation is in progress for tier-$TIER (lock $LIFECYCLE_LOCK, held by pid ${owner:-unknown}) — wait for it to finish, then retry (status/health/probe need no lock)"
+}
+
+preflight() {
+  [[ -x "$BINARY" ]] || die "llama-server not found/executable: $BINARY"
+  [[ -f "$GGUF"   ]] || die "tier-${TIER} GGUF not found: $GGUF (see models.conf)"
+  [[ -f "$TEMPLATE" ]] || die "corrected template missing: $TEMPLATE (#004 tier-64 / #018 tier-16)"
+  for v in CTX BATCH TEMP TOP_P TOP_K REPEAT_PENALTY PRESENCE_PENALTY; do
+    [[ -n "${!v}" ]] || die "TIER_${TIER}_${v} not set in models.conf"
+  done
+}
+
+http_code() { curl -s -o /dev/null -w '%{http_code}' "$1" 2>/dev/null || echo 000; }
+is_green()  { [[ "$(http_code "$BASE/health")" == 200 ]]; }
+
+# running_pid — print the pidfile's PID iff it is live AND identity-verified.
+# kill -0 alone trusts a recycled PID (#029): `start` would falsely report
+# "already running" and — worse — `stop` would SIGTERM-then-SIGKILL an
+# innocent process. The live PID must still be OUR binary serving OUR port
+# (`ps -o command=` carries the full argv we booted with); anything else is a
+# stale pidfile: remove it, never signal that process.
+running_pid() {
+  [[ -f "$PIDFILE" ]] || return 1
+  local pid cmd
+  pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+  [[ "$pid" =~ ^[0-9]+$ ]] || { rm -f "$PIDFILE"; return 1; }
+  kill -0 "$pid" 2>/dev/null || return 1
+  cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  if [[ "$cmd" == *"$BINARY"* ]] && [[ "$cmd" =~ --port[[:space:]]+${PORT}([[:space:]]|$) ]]; then
+    echo "$pid"; return 0
+  fi
+  echo "stale pidfile: $PIDFILE pid $pid is NOT our llama-server on :$PORT (command: ${cmd:-?}) — removing pidfile, leaving that process untouched" >&2
+  rm -f "$PIDFILE"
+  return 1
+}
+
+# launchd state of this tier's agent: prints "loaded (pid N)" / "loaded" and
+# returns 0 if the label is bootstrapped into the gui domain, else returns 1.
+launchd_state() {
+  local out pid
+  [[ -n "$LABEL" ]] || return 1   # tiers.conf "-": no launchd path by design
+  out="$(launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null)" || return 1
+  pid="$(awk '/^[[:space:]]*pid = /{print $3; exit}' <<<"$out")"
+  if [[ -n "$pid" ]]; then echo "loaded (pid $pid)"; else echo "loaded"; fi
+}
+
+# Poll /health for up to HEALTH_TIMEOUT seconds. $1 (optional) = a pid to
+# liveness-check each second (direct-boot path); the launchd path passes none
+# (launchd owns the process and respawns it). Returns 0 on green.
+wait_green() {
+  local pid="${1:-}"
+  for _ in $(seq 1 "$HEALTH_TIMEOUT"); do
+    if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+      echo "process died during startup; log tail:" >&2; tail -20 "$LOG" >&2; return 2
+    fi
+    is_green && return 0
+    sleep 1
+  done
+  return 1
+}
+
+# The non-grammar boot incantation — same shape as verify-template.sh boot(),
+# extended with the per-tier sampler, thinking-off kwarg, and generous -n.
+cmd_start() {
+  preflight
+  local pid
+  if pid="$(running_pid)"; then
+    # Already running (pidfile live). A still-loading server is NOT an error:
+    # wait for green exactly like the fresh-boot path does, instead of letting
+    # cmd_health exit 1 on a red-but-loading /health (#005 defect 1).
+    echo "already running (pid $pid) on :$PORT"
+    if is_green; then echo "  /health green on :$PORT"; return 0; fi
+    echo "  /health not green yet — waiting up to ${HEALTH_TIMEOUT}s for model load"
+    local rc=0; wait_green "$pid" || rc=$?
+    case "$rc" in
+      0) echo "  /health green on :$PORT"; return 0 ;;
+      2) rm -f "$PIDFILE"; exit 2 ;;
+      *) die "running server (pid $pid) did not reach green /health within ${HEALTH_TIMEOUT}s; log tail: $(tail -5 "$LOG")" ;;
+    esac
+  fi
+  if lsof -nP -iTCP:"$PORT" 2>/dev/null | grep -q LISTEN; then
+    die "port $PORT already in use (refusing to touch it — is claw on the wrong port?)"
+  fi
+
+  echo "starting opencode-server (tier-${TIER}, $(basename "$GGUF")) on :$PORT"
+  # NOTE: --chat-template-kwargs is deprecated-but-functional on build 5594d13
+  # (warning only; --reasoning off is the startup-only alternative). Kept for
+  # parity with the setup-guide recipe — see templates/README.md "Notes for #005".
+  nohup "$BINARY" \
+    --host "$HOST_BIND" --port "$PORT" \
+    --model "$GGUF" --alias "$ALIAS" \
+    --ctx-size "$CTX" -ngl 999 -fa on \
+    --cache-type-k q8_0 --cache-type-v q8_0 \
+    --batch-size "$BATCH" \
+    --temp "$TEMP" --top-p "$TOP_P" --top-k "$TOP_K" \
+    --repeat-penalty "$REPEAT_PENALTY" --presence-penalty "$PRESENCE_PENALTY" \
+    --repeat-last-n 256 \
+    --jinja --chat-template-file "$TEMPLATE" \
+    --chat-template-kwargs '{"enable_thinking":false}' \
+    -n "$NPREDICT" \
+    --metrics \
+    > "$LOG" 2>&1 &
+  echo $! > "$PIDFILE"
+  echo "  pid $(cat "$PIDFILE"), log $LOG"
+
+  local rc=0; wait_green "$(cat "$PIDFILE")" || rc=$?
+  case "$rc" in
+    0) echo "  /health green on :$PORT"; return 0 ;;
+    2) rm -f "$PIDFILE"; exit 2 ;;
+    *) die "server did not reach green /health within ${HEALTH_TIMEOUT}s; log tail: $(tail -5 "$LOG")" ;;
+  esac
+}
+
+cmd_stop() {
+  local pid stopped=0
+  if pid="$(running_pid)"; then
+    kill "$pid" 2>/dev/null || true; stopped=1
+    # Bounded wait for the dying process to actually exit (#005 defect 3): a
+    # multi-GB llama-server can take seconds to unload, and without this wait
+    # `restart`'s lsof port preflight sees the dying server still LISTENing on
+    # the port and dies "port already in use" — reliably failing the restart.
+    local waited=0
+    while kill -0 "$pid" 2>/dev/null && [[ "$waited" -lt "$STOP_TIMEOUT" ]]; do
+      sleep 1; waited=$((waited+1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "  pid $pid still alive ${STOP_TIMEOUT}s after SIGTERM — escalating to SIGKILL" >&2
+      kill -9 "$pid" 2>/dev/null || true
+      sleep 1
+    fi
+    # brief grace so the kernel releases the LISTEN socket before any re-bind
+    # (same 10x1s loop cmd_install uses around bootout)
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      lsof -nP -iTCP:"$PORT" 2>/dev/null | grep -q LISTEN || break; sleep 1
+    done
+  fi
+  rm -f "$PIDFILE"
+  if [[ "$stopped" == 1 ]]; then echo "stopped opencode-server (was pid $pid)"; else echo "not running"; fi
+}
+
+cmd_status() {
+  if pid="$(running_pid)"; then echo "process: running (pid $pid) on :$PORT  [direct-boot]"
+  else echo "process: not running (no live pidfile)"; fi
+  if state="$(launchd_state)"; then echo "launchd: $state ($LABEL)"
+  elif [[ -z "$LABEL" ]]; then echo "launchd: none (tier-$TIER is on-demand only by design — tiers.conf label '-')"
+  else echo "launchd: not loaded ($LABEL)"; fi
+  if is_green; then echo "health : green ($BASE/health)"
+  else echo "health : unreachable ($BASE/health)"; fi
+}
+
+cmd_health() { if is_green; then echo "green: $BASE/health"; else echo "unreachable: $BASE/health"; exit 1; fi; }
+
+# Canonical Layer-A admission probe. Checks 1-3 are /apply-template template
+# invariants (system-not-first fix #004 tier-64 / #018 tier-16; closed
+# <think></think> thinking-off prefill, launch-default AND per-request #017) —
+# template-only, no GPU. Check 4 (#010, decision 2026-06-10) is the LIVE
+# tool-call battery: real generations through validate-tool-calls.sh; pass =
+# N/N responses carry a parsed tool_calls[] with valid-JSON args and zero
+# naked-XML/content leaks. Load-bearing for OpenCode: no grammar backstop.
+_probe_prompt() { curl -s -X POST "$BASE/apply-template" -H 'content-type: application/json' -d "$1" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin).get("prompt",""))' 2>/dev/null || true; }
+cmd_probe() {
+  is_green || die "server not green on :$PORT — start it first"
+  local out fails=0
+  # 1) system-not-first: system content must survive and emit an <|im_start|>system block
+  out="$(_probe_prompt '{"messages":[{"role":"user","content":"hi"},{"role":"system","content":"SYSTEM_SENTINEL_42"},{"role":"user","content":"2+2?"}]}')"
+  if [[ "$out" == *"SYSTEM_SENTINEL_42"* && "$out" == *"<|im_start|>system"* ]]; then
+    echo "  PASS  system-not-first fix: system content preserved + <|im_start|>system emitted"
+  else
+    echo "  FAIL  system-not-first fix: system content dropped/500"; fails=$((fails+1))
+  fi
+  # 2) thinking-off (launch default): the server's launch-time enable_thinking:false
+  #    must yield a CLOSED <think>\n\n</think> prefill for a PLAIN request (no kwargs) —
+  #    this is what real OpenCode traffic relies on (it sends no per-request kwarg).
+  out="$(_probe_prompt '{"messages":[{"role":"user","content":"hi"}]}')"
+  if [[ "$out" == *$'<think>\n\n</think>'* ]]; then
+    echo "  PASS  thinking-off (launch default): closed <think></think> on a plain request"
+  else
+    echo "  FAIL  thinking-off (launch default): no closed <think></think> prefill"; fails=$((fails+1))
+  fi
+  # 3) thinking-off (#017 per-request form): explicit chat_template_kwargs.enable_thinking
+  #    :false must ALSO produce the closed prefill (the override the harness route uses).
+  out="$(_probe_prompt '{"messages":[{"role":"user","content":"hi"}],"chat_template_kwargs":{"enable_thinking":false}}')"
+  if [[ "$out" == *$'<think>\n\n</think>'* ]]; then
+    echo "  PASS  thinking-off (#017 per-request): explicit enable_thinking:false -> closed prefill"
+  else
+    echo "  FAIL  thinking-off (#017 per-request): explicit enable_thinking:false NOT honored"; fails=$((fails+1))
+  fi
+  # 4) #010 Layer-A admission gate (decision 2026-06-10): LIVE tool-call
+  #    battery. Unlike checks 1-3 this generates tokens: 3 tool-demanding
+  #    prompts x REPEATS x 2 modes (non-stream + stream) via
+  #    validate-tool-calls.sh (#013 engine — its SUMMARY/RESULT block always
+  #    prints, so the final RESULT: line is parseable unconditionally).
+  #    Pass = N/N runs produced a parsed tool_calls[] with valid-JSON args and
+  #    zero naked-XML (<tool_call>/<function=) content leaks. N is pinned at 6
+  #    (REPEATS=1: every distinct request shape exactly once) — issue #010.
+  #    Measured runtime on an idle server (2026-06-11): ~4-5 s/battery at
+  #    tier-64 AND tier-16/32 — tool-call emissions are short generations;
+  #    budget ~1 min worst-case on a busy box (model load is NOT part of
+  #    probe). REPEATS may be raised (driver preflight) but never zeroed:
+  #    this IS the admission gate — no skip knob by design.
+  local reps battery_n battery_log counts leaks
+  reps="${OPENCODE_PROBE_TOOLCALL_REPEATS:-1}"
+  [[ "$reps" =~ ^[1-9][0-9]*$ ]] || die "OPENCODE_PROBE_TOOLCALL_REPEATS must be a positive integer (got '$reps') — the #010 battery cannot be skipped"
+  battery_n=$((3 * reps * 2))
+  battery_log="$(mktemp /tmp/opencode-probe-battery.XXXXXX)"
+  echo "  ....  tool-call battery (#010): $battery_n live generations via validate-tool-calls.sh (REPEATS=$reps)"
+  REPEATS="$reps" BASE="$BASE" MODEL="$ALIAS" SAVE_DIR="" \
+    "$SCRIPT_DIR/validate-tool-calls.sh" > "$battery_log" 2>&1 || true
+  counts="$(awk '/^ SUMMARY: /{print $2; exit}' "$battery_log")"
+  leaks="$(grep -c 'XML LEAK' "$battery_log" || true)"
+  if grep -q '^RESULT: PASS' "$battery_log"; then
+    echo "probe: tool-call battery ${counts:-$battery_n/$battery_n} parsed, ${leaks:-0} leaks — PASS"
+    rm -f "$battery_log"
+  else
+    echo "probe: tool-call battery ${counts:-0/$battery_n} parsed, ${leaks:-?} leaks — FAIL"
+    echo "      battery diagnostics (full log kept: $battery_log):"
+    grep -E '^── |^  FAIL|XML LEAK|^ SUMMARY:|^RESULT:' "$battery_log" | sed 's/^/      /' || true
+    fails=$((fails+1))
+  fi
+
+  [[ "$fails" -eq 0 ]] || die "$fails probe check(s) failed"
+  echo "probe: all checks passed (tier-$TIER, $BASE)"
+}
+
+# render_plist SRC DEST — fill the launchd plist template's placeholders from
+# the resolved tier config. Replaces the old sed pipeline (#029): sed's
+# `s|__GGUF_PATH__|$GGUF|g` corrupted the rendered plist whenever a
+# models.conf path contained `|` (delimiter) or `&` (whole-match
+# metacharacter), and `&`/`<` additionally need XML escaping to keep the
+# plist valid. Python substitutes literally and XML-escapes every value, so
+# the path that launchd parses back out is byte-for-byte the configured one.
+render_plist() {
+  local abs_template
+  abs_template="$(cd "$(dirname "$TEMPLATE")" && pwd)/$(basename "$TEMPLATE")"
+  PLIST_SRC="$1" PLIST_OUT="$2" \
+  R_BINARY="$BINARY" R_GGUF="$GGUF" R_TEMPLATE="$abs_template" R_CTX="$CTX" \
+  R_BATCH="$BATCH" R_NPREDICT="$NPREDICT" R_TEMP="$TEMP" R_TOP_P="$TOP_P" \
+  R_TOP_K="$TOP_K" R_REPEAT_PENALTY="$REPEAT_PENALTY" \
+  R_PRESENCE_PENALTY="$PRESENCE_PENALTY" \
+  python3 - <<'PY'
+import os
+from xml.sax.saxutils import escape
+mapping = {
+    "__BINARY__": "R_BINARY", "__GGUF_PATH__": "R_GGUF",
+    "__TEMPLATE_PATH__": "R_TEMPLATE", "__CTX_SIZE__": "R_CTX",
+    "__BATCH_SIZE__": "R_BATCH", "__NPREDICT__": "R_NPREDICT",
+    "__TEMP__": "R_TEMP", "__TOP_P__": "R_TOP_P", "__TOP_K__": "R_TOP_K",
+    "__REPEAT_PENALTY__": "R_REPEAT_PENALTY",
+    "__PRESENCE_PENALTY__": "R_PRESENCE_PENALTY",
+}
+src = open(os.environ["PLIST_SRC"]).read()
+for placeholder, env in mapping.items():
+    src = src.replace(placeholder, escape(os.environ[env]))
+with open(os.environ["PLIST_OUT"], "w") as f:
+    f.write(src)
+PY
+}
+
+# --- launchd path (login-persistent; tier-64 = the resident daily daemon) ---
+cmd_install() {
+  # Render/poll parity (#005 defect 4): the plist templates hardcode each
+  # tier's default port/host (no __PORT__/__HOST__ placeholders), while this
+  # function's conflict check and wait_green honor the OPENCODE_LLAMA_PORT/HOST
+  # overrides — so an overridden install would boot a healthy daemon on the
+  # DEFAULT port and falsely die polling the override for HEALTH_TIMEOUT s.
+  # DOCUMENTED CHOICE: refuse overrides at install time (fail fast, pre-
+  # bootstrap) rather than render them — the resident daemon's identity is
+  # fixed by design; direct-boot `start` remains the override-friendly path.
+  if [[ "$PORT" != "$DEF_PORT" || "$HOST_BIND" != "0.0.0.0" ]]; then
+    die "install does not support OPENCODE_LLAMA_PORT/HOST overrides: the tier-$TIER plist hardcodes :$DEF_PORT on 0.0.0.0 (got port=$PORT host=$HOST_BIND). Unset the override(s), or use direct-boot 'start' which honors them."
+  fi
+  [[ -n "$LABEL" ]] || die "tier-$TIER has no launchd path BY DESIGN (tiers.conf label '-') — use start/stop (on-demand only)"
+  preflight
+  [[ -f "$PLIST_TEMPLATE" ]] || die "plist template missing: $PLIST_TEMPLATE (tier-$TIER has no launchd path — use start/stop)"
+  # Hand over from a direct-boot instance of OUR OWN tier, if one is running
+  # (same identity, same port). Anything else on the port is a hard error.
+  if running_pid >/dev/null; then
+    echo "stopping direct-boot instance before launchd handover"; cmd_stop
+  fi
+  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+  # brief grace so the booted-out process releases the port before re-bind
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    lsof -nP -iTCP:"$PORT" 2>/dev/null | grep -q LISTEN || break; sleep 1
+  done
+  if lsof -nP -iTCP:"$PORT" 2>/dev/null | grep -q LISTEN; then
+    die "port $PORT still in use by a foreign process (refusing — never touches claw :11435)"
+  fi
+  mkdir -p "$HOME/Library/LaunchAgents"
+  render_plist "$PLIST_TEMPLATE" "$PLIST_DEST" || die "plist render failed ($PLIST_TEMPLATE -> $PLIST_DEST)"
+  plutil -lint "$PLIST_DEST" >/dev/null || die "rendered plist failed plutil -lint: $PLIST_DEST"
+  launchctl bootstrap "gui/$(id -u)" "$PLIST_DEST"
+  echo "bootstrapped: $LABEL on :$PORT ($PLIST_DEST)"
+  echo "  waiting for green /health (model load; tier-64 ≈ 21 GB resident — see header memory budget)"
+  if wait_green; then
+    echo "  /health green on :$PORT — launchd state: $(launchd_state || echo '?')"
+  else
+    die "launchd service loaded but /health not green within ${HEALTH_TIMEOUT}s; log tail: $(tail -5 "$LOG")"
+  fi
+  # #010: install is an admission seat — run the canonical probe (template
+  # invariants + live tool-call battery) against the freshly bootstrapped
+  # daemon, so a template/build regression can never enter service via a bare
+  # `opencode-server install`. THIS is the one battery per install path
+  # (#016 dedupe): wizard step 51 relies on this seat after an install and
+  # only runs its own probe on the no-install (already-healthy) branch.
+  # cmd_probe die()s on failure, which fails the install with the daemon
+  # left up for diagnosis.
+  echo "  running canonical admission probe (template invariants + #010 tool-call battery)"
+  cmd_probe
+}
+
+cmd_uninstall() {
+  [[ -n "$LABEL" ]] || die "tier-$TIER has no launchd path (tiers.conf label '-') — nothing to uninstall"
+  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+  rm -f "$PLIST_DEST"
+  echo "uninstalled: $LABEL (plist removed: $PLIST_DEST)"
+}
+
+# When sourced (render/identity unit tests), expose config + functions only —
+# never dispatch a command.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then return 0 2>/dev/null || true; fi
+
+# Mutating commands take the per-tier lifecycle lock (#029); held for the whole
+# invocation, released on EXIT. install/restart reach cmd_stop/cmd_start as
+# plain functions, so there is exactly one acquisition per invocation.
+case "${1:-}" in
+  start)     acquire_lifecycle_lock; cmd_start ;;
+  stop)      acquire_lifecycle_lock; cmd_stop ;;
+  restart)   acquire_lifecycle_lock; cmd_stop; cmd_start ;;
+  status)    cmd_status ;;
+  health)    cmd_health ;;
+  probe)     cmd_probe ;;
+  install)   acquire_lifecycle_lock; cmd_install ;;
+  uninstall) acquire_lifecycle_lock; cmd_uninstall ;;
+  *) echo "usage: $(basename "$0") {start|stop|restart|status|health|probe|install|uninstall}" >&2; exit 1 ;;
+esac

@@ -6,4 +6,4 @@ COPY smoke.sh /smoke.sh
 RUN chmod +x /smoke.sh
 
 ENTRYPOINT ["/smoke.sh"]
-CMD ["models"]
+CMD ["docker"]

@@ -1,0 +1,34 @@
+# Baked eval-runner image for the A/B driver's OpenCode phase (issue #009).
+#
+# Replaces the stock `docker:cli` + per-sweep
+#   `apk add --no-cache nodejs docker-cli-compose coreutils git`
+# incantation in run-config-ab.sh: same toolset, installed once at build time
+# instead of over the network on EVERY sweep. Contents and why each is needed:
+#
+#   docker CLI       (base image)      — lib/opencode.js spawns the oc sibling
+#                                        via `docker compose run` over the
+#                                        mounted /var/run/docker.sock
+#   docker-cli-compose                 — the `docker compose` plugin itself
+#   nodejs                             — runs the live tier-eval suite
+#                                        (`node --test`) from the path-matched
+#                                        repo mount
+#   coreutils                          — GNU `timeout --signal/--kill-after`
+#                                        (busybox timeout lacks the long opts
+#                                        the per-cell cap uses)
+#   git                                — sidecar-port arms (opencode-a+git /
+#                                        opencode-a+prompt) git-seed /workspace
+#                                        per cell (runAgent.js seedWorkspaceGit)
+#
+# The image bakes NO repo sources and NO entrypoint: the driver still mounts
+# the live working tree path-matched and runs its inline per-cell loop, so the
+# live-sources contract is unchanged — this image is pure toolchain.
+#
+# Build entrypoint (also documented in run-config-ab.sh's header):
+#   cd host/test && docker compose build runner
+# (equivalently: docker build -f Dockerfile.runner -t mac-llm-lab-eval-runner:local .)
+#
+# Base is major-version-pinned so a rebuild is reproducible against the same
+# docker CLI line we validated (29.x, alpine 3.23 at time of writing).
+FROM docker:29-cli
+
+RUN apk add --no-cache nodejs docker-cli-compose coreutils git

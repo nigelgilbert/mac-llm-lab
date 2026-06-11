@@ -1,0 +1,64 @@
+services:
+  opencode:
+    build:
+      context: .
+      args:
+        OPENCODE_VERSION: ${OPENCODE_VERSION:-1.16.2}
+    image: opencode:local
+    container_name: opencode
+    restart: unless-stopped
+    volumes:
+      - ${WORKSPACE}:/workspace
+      # opencode.json is MOUNTED (not baked) so the provider config stays
+      # repo-visible and editable without an image rebuild. OpenCode reads its
+      # global config from $XDG_CONFIG_HOME/opencode; the container runs as root,
+      # so that resolves to /root/.config/opencode/opencode.json.
+      #
+      # TIER-SELECTABLE (#019): the source config is `${OPENCODE_CONFIG_JSON}`,
+      # defaulting to ./opencode.json (tier-64, baseURL :11436). The phase-swap
+      # driver (run-config-ab.sh) sets OPENCODE_CONFIG_JSON=./opencode.16.json for
+      # TIER=16 so OpenCode dials the tier-16 server on :11437 instead. WITHOUT
+      # this the tier-16 phase silently dials the dead :11436 and every cell
+      # ConnectionRefused-loops until its budget expires (iters=1, 0 tokens) — the
+      # #019 sweep bug. The port lives in the JSON, not here.
+      - ${OPENCODE_CONFIG_JSON:-./opencode.json}:/root/.config/opencode/opencode.json:ro
+    working_dir: /workspace
+    # Sweep-scoped reap handle (#004). run-config-ab.sh generates a per-sweep
+    # OC_SWEEP_ID and forwards it into the eval-runner env; runOpenCode's
+    # `docker compose run` spawn inherits process.env, so compose interpolates
+    # it here and every oc-run-* sibling the sweep spawns carries the label.
+    # The driver's per-cell timeout reap and end-of-sweep trap filter on
+    # `label=mac-llm-lab.sweep=<id>` — NEVER the bare oc-run- name prefix — so
+    # containers from other sweeps or manual runs (OC_SWEEP_ID unset → empty
+    # label value, which a non-empty filter never matches) are left alone.
+    labels:
+      - "mac-llm-lab.sweep=${OC_SWEEP_ID:-}"
+    environment:
+      # CRA reads HOST; harmless for others. Vite/Next still need their own --host
+      # flag. Mirrors claw-code so the shared task suite behaves the same here.
+      - HOST=0.0.0.0
+    # B-side talks STRAIGHT to the second llama-server — NO ANTHROPIC_BASE_URL,
+    # NO LiteLLM bridge. The baseURL lives in the mounted config (above), not
+    # here: tier-64 → opencode.json (:11436, #005, alias `opencode`); tier-16 →
+    # opencode.16.json (:11437, #018, alias `opencode-16`), selected by the
+    # OPENCODE_CONFIG_JSON mount var.
+    extra_hosts:
+      # Lets host.docker.internal resolve to the host when OpenCode runs on the
+      # lab box itself (OrbStack maps host-gateway to the host).
+      - "host.docker.internal:host-gateway"
+      # Black-hole models.dev. At startup OpenCode fetches the models.dev
+      # catalog over HTTPS with NO effective timeout; an intermittently-stalled
+      # Cloudflare connection wedges `opencode run` SILENTLY at "format init"
+      # forever (observed: 13+ min, zero output, no request to :11436). Our
+      # provider (`llama-local`) is fully declared in opencode.json and the
+      # openai-compatible SDK is bundled in the binary, so the catalog is never
+      # needed — pointing models.dev at localhost makes the fetch fail fast and
+      # OpenCode falls straight through to a clean run. See
+      # docs/HEADLESS-ONESHOT.md (#009).
+      - "models.dev:127.0.0.1"
+    # Single dev-server port, mirroring claw-code: tasks in /workspace may start a
+    # framework dev server on 8080.
+    ports:
+      - "8080:8080"
+    # Long-lived no-op so `docker compose exec` can attach / drive OpenCode.
+    command: ["sleep", "infinity"]

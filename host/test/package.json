@@ -1,10 +1,10 @@
 {
-  "name": "mac-llm-lab-claw-ab-tests",
-  "version": "0.1.0",
+  "name": "mac-llm-lab-eval-harness",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "A/B harness comparing the two claw backends (Ollama vs llama-server) over the LiteLLM bridge.",
+  "description": "OpenCode tier-eval panel + config-vs-config A/B harness (node:test, registry-emitting, zero deps).",
   "scripts": {
-    "test": "node --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./lib/registry-reporter.js --test-reporter-destination=stdout"
+    "test": "node --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./lib/registry-reporter.js --test-reporter-destination=stdout __tests__/lib/*.test.js __tests__/scripts/*.test.js"
   }
 }

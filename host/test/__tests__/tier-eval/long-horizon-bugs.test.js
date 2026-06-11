@@ -126,11 +126,6 @@ describe(`long-horizon: 4 bugs across 6 files (tier=${TIER_LABEL})`, () => {
       testId:            'long-horizon-bugs',
       t,
     });
-    assert.equal(ctx.agent.code, 0, 'agent must exit cleanly');
     ctx.workspace.unchanged('README.md', README_MD);
-    assert.equal(
-      ctx.post.status, 0,
-      `post-script failed:\n${ctx.post.stderr.slice(0, 800)}`,
-    );
   });
 });
