@@ -28,6 +28,12 @@ COPY package.json  ./
 COPY lib           ./lib
 COPY scripts       ./scripts
 COPY __tests__     ./__tests__
+# Committed canonical evidence registries (docs/data/README.md): baked so the
+# published-number golden tests (issue #025,
+# __tests__/scripts/config-ab-renderer-goldens.test.js) can re-derive the
+# published CIs inside the compose `test` service. Read-only evidence — no
+# test may write here.
+COPY docs/data     ./docs/data
 
 RUN mkdir -p /workspace
 

@@ -72,6 +72,11 @@ function parseArgs(argv) {
   return opts;
 }
 
+// Returns null when either timestamp is absent, and NaN when one is present
+// but malformed (`new Date('garbage') - …` → NaN). Consumers must filter with
+// Number.isFinite, not `!= null` — a `!= null` filter admits the NaN and
+// poisons median/p90/max (issue #025; the bad ROW is excluded from the
+// duration stats, never repaired).
 const durationS = (r) =>
   r.start_time && r.end_time
     ? (new Date(r.end_time) - new Date(r.start_time)) / 1000
@@ -155,8 +160,8 @@ function main() {
   const stats = {};
   for (const cid of [BASELINE, TREATMENT]) {
     const sideAll = rows.filter((r) => r.config_id === cid);
-    const durAll = sideAll.map(durationS).filter((d) => d != null);
-    const durElig = sideAll.filter(isEligible).map(durationS).filter((d) => d != null);
+    const durAll = sideAll.map(durationS).filter(Number.isFinite);
+    const durElig = sideAll.filter(isEligible).map(durationS).filter(Number.isFinite);
     stats[cid] = { durAll, durElig, n: sideAll.length };
     if (!durAll.length) {
       console.log(`  ${cid.padEnd(11)} wall-clock unavailable (n=0 rows with timestamps)`);
@@ -186,9 +191,20 @@ function main() {
   }
 
   // --- Iteration parity ------------------------------------------------------
+  // iters_count is schema-optional, so a side with ZERO numeric values is a
+  // real dataset, not a corruption. Same n=0 guard as the wall-clock section
+  // (#012): without it `Math.min/max(...[])` renders Infinity/-Infinity and
+  // median() renders null verbatim into committed verdict docs (issue #025).
+  // Number.isFinite (not `typeof === 'number'`) so a NaN value can't poison
+  // the stats either — the degenerate VALUE is excluded from the render; which
+  // rows feed any decision median is #026's question, not touched here.
   console.log('\n--- Iteration parity (iters_count) ---');
   for (const cid of [BASELINE, TREATMENT]) {
-    const it = rows.filter((r) => r.config_id === cid && typeof r.iters_count === 'number').map((r) => r.iters_count);
+    const it = rows.filter((r) => r.config_id === cid && Number.isFinite(r.iters_count)).map((r) => r.iters_count);
+    if (!it.length) {
+      console.log(`  ${cid.padEnd(11)} iters_count unavailable (n=0 rows with numeric iters_count)`);
+      continue;
+    }
     console.log(`  ${cid.padEnd(11)} median ${median(it)}  min ${Math.min(...it)}  max ${Math.max(...it)}  (n=${it.length})`);
   }
 
