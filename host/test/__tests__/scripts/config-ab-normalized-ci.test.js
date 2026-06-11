@@ -127,7 +127,9 @@ describe('config-ab-normalized-ci.mjs — symmetric overflow normalization (issu
     it('typo\'d --treatment exits 2 with the VALID_CONFIGS message, not a stack trace', () => {
       const res = runScript('registry-overflow-baseline-only.jsonl', ['--treatment', 'opencode-z']);
       assert.equal(res.status, 2, `exit ${res.status}; stderr:\n${res.stderr}`);
-      assert.match(res.stderr, /--treatment "opencode-z" is not in VALID_CONFIGS \{claw-rig, opencode-a, opencode-a\+git, opencode-a\+prompt\}/);
+      // Enum literal tracks lib/config.js VALID_CONFIGS (the +prompt-h1/-h2
+      // members are the T11 prompt-halves arms, OPENCODE-PROMPT-HALVES-PREREG.md §2.1).
+      assert.match(res.stderr, /--treatment "opencode-z" is not in VALID_CONFIGS \{claw-rig, opencode-a, opencode-a\+git, opencode-a\+prompt, opencode-a\+prompt-h1, opencode-a\+prompt-h2\}/);
       assert.ok(!/^\s+at /m.test(res.stderr), `stderr has a stack trace:\n${res.stderr}`);
     });
 

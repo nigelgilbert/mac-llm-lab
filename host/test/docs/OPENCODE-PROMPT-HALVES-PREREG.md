@@ -1,6 +1,6 @@
 # Pre-registration — prompt-halves ablation, tier-16 (which half of the discipline prompt carries the +6.6pp?)
 
-**Status: DRAFT — awaiting lab-owner sign-off. ZERO sweep compute before sign-off.**
+**Status: SIGNED OFF 2026-06-11 (lab owner) — §9 decision recorded; T11 wiring + sweep authorized.**
 
 **Date:** 2026-06-11 · Tranche T10 · Salvage-doc ranked item 1
 ([research-salvage-next-tranche-20260610.md](../../../research/research-salvage-next-tranche-20260610.md)
@@ -407,20 +407,17 @@ re-deriving verbatim from the committed copy (seeded bootstrap, bit-for-bit).
 
 ## 9. Sign-off
 
-**Lab-owner decision: PENDING**
+**Lab-owner decision: APPROVED 2026-06-11**
 
-- [ ] **Arms + split approved as drafted** (§2: four arms; h1 = rules 1–3,
+- [x] **Arms + split approved as drafted** (§2: four arms; h1 = rules 1–3,
       h2 = rules 4–6, scaffolding in both, verbatim line-subsets pinned by
-      sha256)? If amended, record the amended split here and re-pin hashes
-      **before** T11 wiring.
-- [ ] **Data plan:** ☐ fresh 4-arm sweep (1024 runs, ~20 h, recommended) ·
-      ☐ 2-arm reuse against the sidecar-port registry (512 runs, ~10 h,
-      carries the §4 semantics/telemetry/provenance asymmetries)
-- [ ] **Margins / N changes?** (default: N=8, 90% CI, carry criterion
-      "CI excludes 0 AND point ≥ C1/2" — any change recorded here
-      supersedes §5 before data, never after.)
+      sha256). No amendment.
+- [x] **Data plan: fresh 4-arm sweep** (1024 runs, ~20 h, the recommended
+      option). The 2-arm reuse alternative was declined.
+- [x] **Margins / N: defaults kept** (N=8, 90% CI, carry criterion
+      "CI excludes 0 AND point ≥ C1/2").
 
-Decision recorded (date + initials): ____________________
-
-*Reminder per the status line: no sweep compute, no wiring, no server
-contact until this block is signed.*
+Decision recorded: 2026-06-11, lab owner (Nigel Gilbert), via interactive
+sign-off in the T10→T11 orchestration session (tranche log:
+issues/LOG-2026-06-11-research-t10.md). Everything in §5 is now frozen;
+any later change would be a protocol deviation and must be reported as such.

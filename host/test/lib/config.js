@@ -13,6 +13,8 @@
 //   CONFIG=opencode-a        → 'opencode-a'
 //   CONFIG=opencode-a+git    → 'opencode-a+git'    (sidecar-port A/B control arm)
 //   CONFIG=opencode-a+prompt → 'opencode-a+prompt' (sidecar-port A/B treatment arm)
+//   CONFIG=opencode-a+prompt-h1 / -h2 → the prompt-halves decomposition arms
+//       (tier-16 ONLY — OPENCODE-PROMPT-HALVES-PREREG.md §2; T11 wiring)
 //
 // `claw-rig` is HISTORICAL-ONLY since #008/#010 retired the claw stack
 // (archived at git tag `claw-stack-final`). It stays in VALID_CONFIGS so the
@@ -29,6 +31,15 @@
 // git-init confound. The original `opencode-a` stays byte-identical (bare
 // workspace) so prior rows keep their meaning.
 //
+// The `opencode-a+prompt-h1` / `opencode-a+prompt-h2` pair is the tier-16
+// prompt-halves decomposition (OPENCODE-PROMPT-HALVES-PREREG.md, signed off
+// 2026-06-11): same git-init + committed-AGENTS.md mechanism as `+prompt`,
+// but the AGENTS.md planted is a pinned verbatim line-subset HALF of
+// system-prompt.md — h1 = preamble+header+rules 1–3 ("call economy",
+// system-prompt.h1.md), h2 = preamble+header+rules 4–6 ("output/action
+// discipline", system-prompt.h2.md). Pinned byte-precise in the prereg §2.2
+// and contract-tested (__tests__/lib/prompt-halves.contract.test.js).
+//
 // The accepted values are exactly the `config_id` enum the registry already
 // pairs on (lib/run_row.js default 'claw-rig'; paired_bootstrap treatment
 // 'opencode-a' / baseline 'claw-rig'), so CONFIG *is* the config_id — no second
@@ -44,10 +55,23 @@ import { fileURLToPath } from 'node:url';
 
 /** The accepted CONFIG / config_id values (the registry's coarse bundle enum).
  *  'claw-rig' is historical-only (readable rows, no runner). */
-export const VALID_CONFIGS = ['claw-rig', 'opencode-a', 'opencode-a+git', 'opencode-a+prompt'];
+export const VALID_CONFIGS = [
+  'claw-rig',
+  'opencode-a',
+  'opencode-a+git',
+  'opencode-a+prompt',
+  'opencode-a+prompt-h1',
+  'opencode-a+prompt-h2',
+];
 
 /** Every RUNNABLE config — all route to the OpenCode runner. */
-export const OPENCODE_CONFIGS = ['opencode-a', 'opencode-a+git', 'opencode-a+prompt'];
+export const OPENCODE_CONFIGS = [
+  'opencode-a',
+  'opencode-a+git',
+  'opencode-a+prompt',
+  'opencode-a+prompt-h1',
+  'opencode-a+prompt-h2',
+];
 
 /**
  * True iff this config_id runs under the OpenCode harness (any arm).
@@ -66,7 +90,7 @@ export function isOpenCodeConfig(configId) {
  * silently mislabel rows or pick the wrong runner.
  *
  * @param {NodeJS.ProcessEnv} [env=process.env]
- * @returns {'claw-rig'|'opencode-a'|'opencode-a+git'|'opencode-a+prompt'}
+ * @returns {'claw-rig'|'opencode-a'|'opencode-a+git'|'opencode-a+prompt'|'opencode-a+prompt-h1'|'opencode-a+prompt-h2'}
  */
 export function resolveConfigId(env = process.env) {
   const raw = env.CONFIG;
@@ -108,6 +132,22 @@ const OPENCODE_PROMPT_MODEL_CONFIG_ID_BY_TIER = {
   '32': 'qwen35-9b-q5kxl-ctx64k-v7noreppen-pp01-opencode-prompt',
 };
 
+// Prompt-halves decomposition arms (OPENCODE-PROMPT-HALVES-PREREG.md §2.1,
+// signed off 2026-06-11): each half plants a DIFFERENT prompt pack
+// (pp01+agentsmd-h1-v1 / -h2-v1), so each gets its own serving fingerprint —
+// same convention as `+prompt` above. TIER-16 ONLY, deliberately: the
+// experiment is pre-registered at tier 16 (prereg §3) and no tier-32/64
+// fingerprints exist; the #006 arm×tier preflight refusing h-arms at any
+// other tier (via the modelConfigIdFor throw below) is correct and intended.
+const OPENCODE_PROMPT_HALF_MODEL_CONFIG_ID_BY_TIER = {
+  'opencode-a+prompt-h1': {
+    '16': 'qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-prompt-h1',
+  },
+  'opencode-a+prompt-h2': {
+    '16': 'qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-prompt-h2',
+  },
+};
+
 /**
  * The OpenCode (Config B) model_config_id for a given tier. Returns `undefined`
  * for the claw side (claw's production model_config_id varies per sampler sweep
@@ -116,16 +156,17 @@ const OPENCODE_PROMPT_MODEL_CONFIG_ID_BY_TIER = {
  * rather than emit a row against a non-existent manifest entry.
  *
  * @param {Object} o
- * @param {'claw-rig'|'opencode-a'|'opencode-a+git'|'opencode-a+prompt'} o.configId
+ * @param {'claw-rig'|'opencode-a'|'opencode-a+git'|'opencode-a+prompt'|'opencode-a+prompt-h1'|'opencode-a+prompt-h2'} o.configId
  * @param {string|number} o.tier   Hardware tier (e.g. '64' | '16').
  * @returns {string|undefined}
  */
 export function modelConfigIdFor({ configId, tier } = {}) {
   if (!isOpenCodeConfig(configId)) return undefined;
   const key = String(tier);
-  const map = configId === 'opencode-a+prompt'
-    ? OPENCODE_PROMPT_MODEL_CONFIG_ID_BY_TIER
-    : OPENCODE_MODEL_CONFIG_ID_BY_TIER;
+  const map = OPENCODE_PROMPT_HALF_MODEL_CONFIG_ID_BY_TIER[configId]
+    ?? (configId === 'opencode-a+prompt'
+      ? OPENCODE_PROMPT_MODEL_CONFIG_ID_BY_TIER
+      : OPENCODE_MODEL_CONFIG_ID_BY_TIER);
   const id = map[key];
   if (!id) {
     throw new Error(

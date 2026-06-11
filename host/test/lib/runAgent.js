@@ -178,12 +178,15 @@ export async function runAgent({
 
     // Sidecar-port arms (OPENCODE-SIDECAR-PORT-HANDOFF.md §4): git-initialize
     // the workspace AFTER the seed write (so the plant survives reset()) and
-    // BEFORE the runner sees it. Done for BOTH arms so the +prompt-vs-+git
-    // comparison isolates the prompt effect from the git-init confound.
+    // BEFORE the runner sees it. Done for ALL these arms so any +prompt*-vs-
+    // +git comparison isolates the prompt effect from the git-init confound.
+    // The prompt-halves arms (OPENCODE-PROMPT-HALVES-PREREG.md §2, T11) plant
+    // their pinned HALF artifact instead of the full system-prompt.md; the
+    // arm → planted-artifact routing lives in AGENTS_MD_SOURCE_BY_CONFIG.
     {
       const configId = resolveConfigId();
-      if (configId === 'opencode-a+git' || configId === 'opencode-a+prompt') {
-        seedWorkspaceGit({ plantAgentsMd: configId === 'opencode-a+prompt' });
+      if (configId === 'opencode-a+git' || configId in AGENTS_MD_SOURCE_BY_CONFIG) {
+        seedWorkspaceGit({ configId, agentsMdPath: AGENTS_MD_SOURCE_BY_CONFIG[configId] ?? null });
       }
     }
 
@@ -365,10 +368,24 @@ function relabelRunSummaryHarnessError(runDir, harnessError, detail) {
 // treatment — handoff §6.4). Resolved relative to this file so it works in both
 // the baked test image and the path-matched eval-runner sibling (#009; the repo
 // is mounted at its own absolute path there).
-const SYSTEM_PROMPT_PATH = path.resolve(
+const LLAMA_DOCS_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  '../../llama-server/docs/system-prompt.md',
+  '../../llama-server/docs',
 );
+const SYSTEM_PROMPT_PATH = path.join(LLAMA_DOCS_DIR, 'system-prompt.md');
+
+// Which committed artifact each prompt-planting arm plants as AGENTS.md.
+// `+prompt` plants the full system-prompt.md; the prompt-halves arms
+// (OPENCODE-PROMPT-HALVES-PREREG.md §2.2, T11 wiring) plant their pinned
+// verbatim line-subset half — h1 = lines 1–7 ("call economy"), h2 = lines
+// 1–4 + 8–10 ("output/action discipline"). All resolved the same way, so the
+// halves work in every seat the full prompt does. The halves' byte/sha256
+// pins are contract-tested (__tests__/lib/prompt-halves.contract.test.js).
+const AGENTS_MD_SOURCE_BY_CONFIG = {
+  'opencode-a+prompt':    SYSTEM_PROMPT_PATH,
+  'opencode-a+prompt-h1': path.join(LLAMA_DOCS_DIR, 'system-prompt.h1.md'),
+  'opencode-a+prompt-h2': path.join(LLAMA_DOCS_DIR, 'system-prompt.h2.md'),
+};
 
 // Git-initialize /workspace (+ optionally plant AGENTS.md) for the sidecar-port
 // arms. OpenCode establishes its "project" via a git root: rules/instructions
@@ -380,12 +397,15 @@ const SYSTEM_PROMPT_PATH = path.resolve(
 // null-arm FINDING 2 caught (treatment label on rows whose prompt never injected),
 // which is worse than no data. The pass oracle is blind to `.git`/`AGENTS.md`
 // (it only runs the post-script), so the plant cannot affect pass/fail.
-function seedWorkspaceGit({ plantAgentsMd }) {
+// `agentsMdPath` = the committed artifact to plant verbatim (null for the
+// git-init-only control arm). A missing/unreadable artifact throws via
+// readFileSync — same fail-loud posture as the git steps.
+function seedWorkspaceGit({ configId, agentsMdPath }) {
   const cwd = workspace.WORKSPACE;
-  if (plantAgentsMd) {
+  if (agentsMdPath) {
     fs.writeFileSync(
       path.join(cwd, 'AGENTS.md'),
-      fs.readFileSync(SYSTEM_PROMPT_PATH, 'utf8'),
+      fs.readFileSync(agentsMdPath, 'utf8'),
     );
   }
   const steps = [
@@ -400,7 +420,7 @@ function seedWorkspaceGit({ plantAgentsMd }) {
       throw new Error(
         `seedWorkspaceGit: \`git ${args.join(' ')}\` failed in ${cwd} ` +
         `(status=${r.status}${r.error ? `, error=${r.error.message}` : ''}): ` +
-        `${(r.stderr || '').slice(0, 400)} — the ${plantAgentsMd ? 'opencode-a+prompt' : 'opencode-a+git'} ` +
+        `${(r.stderr || '').slice(0, 400)} — the ${configId} ` +
         'arm REQUIRES a git-rooted workspace (OpenCode rules discovery no-ops without it); ' +
         'in the Phase B runner sibling, `git` must be baked into the eval-runner image ' +
         '(host/test/Dockerfile.runner, #009 — rebuild: cd host/test && docker compose build runner).',

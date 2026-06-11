@@ -102,3 +102,48 @@ Net: 5 flake events across 8 t16 cell attempts vs 0/5 at t64 — consistent
 with the #019 share-degradation record (all kills pre-agent, seed phase; the
 retry layer recovered 3 of 5 events; the double-flake shape exceeded the
 single-retry budget twice). First real co-resident soak data for #019.
+
+---
+
+# T11 — prompt-halves wiring + sweep (started 2026-06-11, post-sign-off)
+
+**HITL gate cleared:** lab owner approved the prereg §9 same-day (arms +
+split as drafted; **fresh 4-arm sweep**, 1024 runs; defaults kept). Decision
+recorded in the doc; §5 is frozen.
+
+## T11 wiring (agent R4) — ✅ complete, verified
+
+- Half artifacts committed (`host/llama-server/docs/system-prompt.h1.md` /
+  `.h2.md`) — orchestrator and agent independently verified byte/sha
+  equality with the prereg §2.2 pins (740 B `cf7dafb0…` / 802 B `cd3213d8…`).
+- lib/config.js (VALID_CONFIGS, OPENCODE_CONFIGS, half fingerprint map —
+  tier-16 ONLY, #006 refusal elsewhere intended), schema config_id enum,
+  model_configs.json ×2 (`pp01+agentsmd-h1-v1`/`-h2-v1`), runAgent.js
+  seeding via `AGENTS_MD_SOURCE_BY_CONFIG`. New
+  `prompt-halves.contract.test.js` (pins + verbatim-subset + live drift
+  gate, tiers.conf-contract pattern); config-selector tests extended.
+- Suite (rebuilt baked image): **365/364/0 fail/1 skip** (floor 357/356).
+- Preflight ×4 @16 PASS; h1×64 refusal dies pre-server naming the pair.
+- Single-cell smokes (tier-16, under lock): planted AGENTS.md byte-matches
+  the half pins per arm; rows carry the right config_id/model_config_id;
+  gate PASS; retried_cells=0 both arms. Lab restored (:11437 quiet,
+  resident green, lock released).
+- Flagged deviation accepted: config-ab-normalized-ci.test.js regex pins
+  the VALID_CONFIGS enum verbatim → one-line update (unavoidable).
+- run-config-ab.sh and tiers.conf untouched (as expected post-#010/#016).
+
+Committed as T11. Sweep launched AFK after the commit (see below).
+
+## T11 sweep (the pre-registered 4-arm ablation)
+
+Canonical protocol: `TIER=16`, `ARMS="opencode-a+git opencode-a+prompt
+opencode-a+prompt-h1 opencode-a+prompt-h2"`, `BASELINE=opencode-a+git`,
+`CONFIG_AB_REPEATS=8`, the 32-stem panel via SMOKE_TESTS (stems extracted
+from the committed sidecar-port registry — exactly the verdict table's 32),
+`OPENCODE_SERVER_TIMINGS=1`, fresh
+`REGISTRY_OUT=.claw-runtime/run_registry.prompt-halves-20260611.jsonl`,
+resident lock held with `OC_ROTATE_HOLDING_LOCK=1`; resident :11436
+read-only; :11437 lifecycle owned by the driver. Expected ~20 h.
+retried_cells per arm to be appended to the ledger above when the sweep
+lands. Post-sweep (next session): analysis per prereg §5, verdict memo +
+committed canonical registry, then the **#018 tally → STOP (HITL)**.

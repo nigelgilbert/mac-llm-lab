@@ -587,5 +587,51 @@
     "prompt_pack_version": "pp01+agentsmd-v1",
     "tier_compatibility": [16],
     "notes": "**Sidecar-port `+prompt` fingerprint for tier-16 (OPENCODE-SIDECAR-PORT-HANDOFF.md §4).** Serving is byte-identical to `qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-a` (same OpenCode-dedicated llama-server :11437, corrected Qwen3.5 Jinja template, native tool_calls, thinking-off); the ONLY delta is the prompt pack: claw's `host/llama-server/docs/system-prompt.md` (tool-use discipline rules) is planted VERBATIM as a git-committed `AGENTS.md` in /workspace before each run, which OpenCode injects via its project-rules discovery (requires a git root — handoff §2). Pairs with `config_id=opencode-a+prompt` rows. The git-init-only control arm `opencode-a+git` deliberately REUSES the plain `...-opencode-a` fingerprint (its serving and prompt pack are unchanged; the git-init is harness-side provenance carried by config_id). The grammar half of the original sidecar idea is dead: `claw.gbnf` as a global --grammar-file is silently overridden whenever the request carries `tools` on the --jinja path (handoff §1) — this arm is prompt-only by design."
+  },
+  "qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-prompt-h1": {
+    "model_config_id": "qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-prompt-h1",
+    "model_id": "unsloth/Qwen3.5-9B-GGUF@IQ4_XS",
+    "model_family": "qwen3.5",
+    "parameter_count": 9000000000,
+    "quantization": "IQ4_XS",
+    "context_limit": 65536,
+    "runtime_backend": "llama-server@unknown",
+    "sampler_config_id": "v6-antiloop",
+    "sampler_settings": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.05,
+      "repeat_penalty": 1.1,
+      "presence_penalty": 0,
+      "seed_policy": "per_run"
+    },
+    "harness_version": "d0d46f4",
+    "prompt_pack_version": "pp01+agentsmd-h1-v1",
+    "tier_compatibility": [16],
+    "notes": "**Prompt-halves h1 (\"call economy\") fingerprint for tier-16 (OPENCODE-PROMPT-HALVES-PREREG.md §2, signed off 2026-06-11).** Serving is byte-identical to `qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-prompt` / `...-opencode-a` (same OpenCode-dedicated llama-server :11437, corrected Qwen3.5 Jinja template, native tool_calls, thinking-off); the ONLY delta is the prompt pack: `host/llama-server/docs/system-prompt.h1.md` — the pinned verbatim line-subset of system-prompt.md assembled as `sed -n '1,7p'` (preamble, blank, header, blank, rules 1-3: one call per operation / trust non-error results, never re-call with same args / batch distinct operations once) — planted as a git-committed `AGENTS.md` in /workspace before each run. h1 governs the TOOL-CALL channel (call economy / idempotence / anti-loop). Pinned 740 bytes, sha256 cf7dafb075e68543c89ab9e9514f473066b8ad13190c95cabc11f5d401ab2585 (prereg §2.2; contract test __tests__/lib/prompt-halves.contract.test.js). Pairs with `config_id=opencode-a+prompt-h1` rows. TIER-16 ONLY by design — the experiment is pre-registered at tier 16; no tier-32/64 mapping exists and the #006 arm×tier preflight refuses h-arms elsewhere."
+  },
+  "qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-prompt-h2": {
+    "model_config_id": "qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-prompt-h2",
+    "model_id": "unsloth/Qwen3.5-9B-GGUF@IQ4_XS",
+    "model_family": "qwen3.5",
+    "parameter_count": 9000000000,
+    "quantization": "IQ4_XS",
+    "context_limit": 65536,
+    "runtime_backend": "llama-server@unknown",
+    "sampler_config_id": "v6-antiloop",
+    "sampler_settings": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.05,
+      "repeat_penalty": 1.1,
+      "presence_penalty": 0,
+      "seed_policy": "per_run"
+    },
+    "harness_version": "d0d46f4",
+    "prompt_pack_version": "pp01+agentsmd-h2-v1",
+    "tier_compatibility": [16],
+    "notes": "**Prompt-halves h2 (\"output/action discipline\") fingerprint for tier-16 (OPENCODE-PROMPT-HALVES-PREREG.md §2, signed off 2026-06-11).** Serving is byte-identical to `qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-prompt` / `...-opencode-a` (same OpenCode-dedicated llama-server :11437, corrected Qwen3.5 Jinja template, native tool_calls, thinking-off); the ONLY delta is the prompt pack: `host/llama-server/docs/system-prompt.h2.md` — the pinned verbatim line-subset of system-prompt.md assembled as `sed -n '1,4p;8,10p'` (preamble, blank, header, blank, rules 4-6: never echo <available_tools> / end with brief confirmation, no alternatives or retries / ACT, do not narrate) — planted as a git-committed `AGENTS.md` in /workspace before each run. h2 governs the TEXT channel (output / action discipline; its rule list visibly starts at \"4.\" — accepted cosmetic artifact, prereg §2.2: renumbering would be adaptation). Pinned 802 bytes, sha256 cd3213d8847f7d7e88def206cd054310dcb79c74ca103ffea51ca1f1c47448d3 (prereg §2.2; contract test __tests__/lib/prompt-halves.contract.test.js). Pairs with `config_id=opencode-a+prompt-h2` rows. TIER-16 ONLY by design — the experiment is pre-registered at tier 16; no tier-32/64 mapping exists and the #006 arm×tier preflight refuses h-arms elsewhere."
   }
 }

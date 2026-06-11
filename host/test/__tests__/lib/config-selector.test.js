@@ -17,7 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { resolveConfigId, modelConfigIdFor, VALID_CONFIGS } from '../../lib/config.js';
+import { resolveConfigId, modelConfigIdFor, isOpenCodeConfig, VALID_CONFIGS, OPENCODE_CONFIGS } from '../../lib/config.js';
 import { selectRunner } from '../../lib/runAgent.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -48,11 +48,28 @@ describe('resolveConfigId — one env, defaults to claw-rig', () => {
     assert.equal(resolveConfigId({ CONFIG: 'opencode-a+git' }), 'opencode-a+git');
     assert.equal(resolveConfigId({ CONFIG: 'opencode-a+prompt' }), 'opencode-a+prompt');
   });
+  // Prompt-halves decomposition arms (OPENCODE-PROMPT-HALVES-PREREG.md §2.1,
+  // T11 wiring): same +-suffix enum style, runnable OpenCode arms.
+  it('prompt-halves arms resolve to themselves and are runnable OpenCode configs', () => {
+    for (const CONFIG of ['opencode-a+prompt-h1', 'opencode-a+prompt-h2']) {
+      assert.equal(resolveConfigId({ CONFIG }), CONFIG);
+      assert.ok(isOpenCodeConfig(CONFIG), `${CONFIG} must be in OPENCODE_CONFIGS`);
+      assert.ok(OPENCODE_CONFIGS.includes(CONFIG));
+    }
+    assert.ok(!isOpenCodeConfig('claw-rig'), 'claw-rig stays historical/non-runnable');
+  });
   it('unrecognized value throws (fail loud, never silently mislabel)', () => {
     assert.throws(() => resolveConfigId({ CONFIG: 'opencode' }), /not a recognized config/);
   });
   it('VALID_CONFIGS matches the registry pairing enum', () => {
-    assert.deepEqual(VALID_CONFIGS, ['claw-rig', 'opencode-a', 'opencode-a+git', 'opencode-a+prompt']);
+    assert.deepEqual(VALID_CONFIGS, [
+      'claw-rig',
+      'opencode-a',
+      'opencode-a+git',
+      'opencode-a+prompt',
+      'opencode-a+prompt-h1',
+      'opencode-a+prompt-h2',
+    ]);
   });
 });
 
@@ -115,12 +132,39 @@ describe('modelConfigIdFor — per-tier Config-B fingerprint', () => {
     );
   });
 
+  // Prompt-halves arms (OPENCODE-PROMPT-HALVES-PREREG.md §2.1, T11): each
+  // half plants a different prompt pack (pp01+agentsmd-h1-v1 / -h2-v1), so
+  // each gets its OWN tier-16 fingerprint — and tier-16 ONLY: the experiment
+  // is pre-registered at tier 16, so an h-arm at any other tier must throw
+  // (the #006 arm×tier preflight turns that throw into a pre-sweep refusal).
+  it('opencode-a+prompt-h1/-h2 tier 16 → their dedicated half fingerprints', () => {
+    assert.equal(
+      modelConfigIdFor({ configId: 'opencode-a+prompt-h1', tier: '16' }),
+      'qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-prompt-h1',
+    );
+    assert.equal(
+      modelConfigIdFor({ configId: 'opencode-a+prompt-h2', tier: 16 }), // numeric tier too
+      'qwen35-9b-iq4xs-ctx64k-v6antiloop-pp01-opencode-prompt-h2',
+    );
+  });
+  it('h-arms on any non-16 tier throw, naming the pair (tier-16-only by design)', () => {
+    assert.throws(
+      () => modelConfigIdFor({ configId: 'opencode-a+prompt-h1', tier: '64' }),
+      /No opencode-a\+prompt-h1 model_config_id mapped for tier "64"/,
+    );
+    assert.throws(
+      () => modelConfigIdFor({ configId: 'opencode-a+prompt-h2', tier: '32' }),
+      /No opencode-a\+prompt-h2 model_config_id mapped for tier "32"/,
+    );
+  });
+
   it('all mapped fingerprints exist in the committed manifest (drift guard)', () => {
     const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8'));
     const cells = [
       ['opencode-a', '64'], ['opencode-a', '16'], ['opencode-a', '32'],
       ['opencode-a+git', '16'], ['opencode-a+prompt', '16'],
       ['opencode-a+git', '32'], ['opencode-a+prompt', '32'],
+      ['opencode-a+prompt-h1', '16'], ['opencode-a+prompt-h2', '16'],
     ];
     for (const [configId, tier] of cells) {
       const id = modelConfigIdFor({ configId, tier });
@@ -155,8 +199,8 @@ describe('selectRunner — CONFIG routes the default runner', () => {
     assert.equal(typeof run, 'function');
   });
 
-  it('sidecar-port arms route to the opencode branch (HOST_WORKSPACE demanded)', () => {
-    for (const CONFIG of ['opencode-a+git', 'opencode-a+prompt']) {
+  it('sidecar-port + prompt-halves arms route to the opencode branch (HOST_WORKSPACE demanded)', () => {
+    for (const CONFIG of ['opencode-a+git', 'opencode-a+prompt', 'opencode-a+prompt-h1', 'opencode-a+prompt-h2']) {
       assert.throws(() => selectRunner({ CONFIG }), /HOST_WORKSPACE/);
       const run = selectRunner({ CONFIG, HOST_WORKSPACE: makeTmp('hw-') });
       assert.equal(typeof run, 'function');
