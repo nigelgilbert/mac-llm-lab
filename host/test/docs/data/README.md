@@ -13,6 +13,7 @@ Do not edit these files; they are evidence, not working data.
 | `run_registry.config-ab-20260606-165548.jsonl` | 512 = 2 arms × 32 tasks × 8 | [OPENCODE-AB-FINAL-REPORT.md](../OPENCODE-AB-FINAL-REPORT.md) tier-64 verdict (RETIRE: +3.1pp [+0.8,+6.3], 0.61× wall) | `.claw-runtime/` same name |
 | `run_registry.config-ab-20260607-062848.jsonl` | 512 = 2 arms × 32 tasks × 8 | [OPENCODE-AB-FINAL-REPORT.md](../OPENCODE-AB-FINAL-REPORT.md) tier-16 verdict (KEEP: −7.7pp [−13.1,−2.5], 0.96× wall) + §6.3 normalized CI | `.claw-runtime/` same name |
 | `run_registry.sidecar-port-20260610.jsonl` | 1024 = 4 arms × 32 tasks × 8 | [OPENCODE-SIDECAR-PORT-HANDOFF.md](../OPENCODE-SIDECAR-PORT-HANDOFF.md) RESULT table (prompt effect +6.6pp [+3.1,+10.2]; +prompt vs claw −1.5pp [−6.4,+3.5]; normalized +0.8pp [−3.9,+5.9]) | `.claw-runtime/` same name |
+| `run_registry.prompt-halves-20260611.jsonl` | 1024 = 4 arms × 32 tasks × 8 | [OPENCODE-PROMPT-HALVES-VERDICT.md](../OPENCODE-PROMPT-HALVES-VERDICT.md) (G1 FAILED: C1 +0.1pp [−3.4,+3.9]; C2 −0.5pp [−3.9,+2.7]; C3 −3.9pp [−7.7,−0.6] — descriptive) | `.claw-runtime/` same name |
 
 Note on the sidecar-port row count: the sweep registry is **1024** rows (the
 512-row tier-16 final registry's claw/oc rows reused via `SKIP_PHASE_A`, plus
@@ -37,6 +38,12 @@ $DR scripts/config-ab-verdict.mjs docs/data/run_registry.config-ab-20260606-1655
 $DR scripts/config-ab-verdict.mjs docs/data/run_registry.config-ab-20260607-062848.jsonl --tier 16
 # §6.3 sensitivity → normalized −5.47pp [−10.94, 0.00]pp
 $DR scripts/config-ab-normalized-ci.mjs docs/data/run_registry.config-ab-20260607-062848.jsonl --tier 16
+
+# prompt-halves ablation (2026-06-12 verdict; renderer image: mac-llm-lab-eval-runner:local works too):
+#   --treatment opencode-a+prompt    --baseline opencode-a+git → +0.1pp [−3.4, +3.9]  (C1; G1 FAILED)
+#   --treatment opencode-a+prompt-h1 --baseline opencode-a+git → −0.5pp [−3.9, +2.7]  (C2, descriptive)
+#   --treatment opencode-a+prompt-h2 --baseline opencode-a+git → −3.9pp [−7.7, −0.6]  (C3, descriptive)
+$DR scripts/config-ab-verdict.mjs docs/data/run_registry.prompt-halves-20260611.jsonl --tier 16 --treatment opencode-a+prompt --baseline opencode-a+git
 
 # sidecar-port sweep — the four handoff RESULT comparisons:
 #   (default)                                            → −7.7pp [−13.1, −2.5]  (replication)

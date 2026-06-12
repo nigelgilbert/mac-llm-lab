@@ -60,4 +60,40 @@ registry rows:
 ## Blocked by
 
 - ~~#010 (instrumentation must land first)~~ ✅ landed 2026-06-11 (see note above for the landed field set)
-- First post-sprint N≥8 sweep (any planned A/B counts; do not run a sweep solely for this)
+- ~~First post-sprint N≥8 sweep~~ ✅ landed 2026-06-12 (prompt-halves sweep, tally below)
+
+## Data — first post-#010 N≥8 sweep tally (2026-06-12, orchestrator)
+
+Source: the prompt-halves sweep, 1024 rows = 4 arms × 32 tasks × N=8 at
+tier-16, committed at
+`host/test/docs/data/run_registry.prompt-halves-20260611.jsonl`
+(harness `927b7d0`, `OPENCODE_SERVER_TIMINGS=1`). The three landed row
+fields, tallied per arm (tier is 16 throughout; per-task split below):
+
+| arm | rows | tool_call_count Σ | error_tool_call_count Σ | truncated Σ | rows w/ ≥1 error | error rate |
+|---|---|---|---|---|---|---|
+| opencode-a+git | 256 | 3720 | 667 | 27 | 148 | 17.9% |
+| opencode-a+prompt | 256 | 3348 | 619 | 29 | 141 | 18.5% |
+| opencode-a+prompt-h1 | 256 | 3805 | 746 | 27 | 138 | 19.6% |
+| opencode-a+prompt-h2 | 256 | 3988 | 734 | 32 | 137 | 18.4% |
+
+- **Zero rows with null telemetry** (1024/1024 carry all three fields —
+  the #010 promotion is fully flowing on opencode arms).
+- **Per-task concentration** (error Σ across arms / task call volume):
+  expression-eval 320 (28.3% of 1130), book-store 255 (28.8%), csv-parser
+  238 (35.9%), wordy 223 (22.8%), two-bucket 205 (24.6%) — the same hard
+  long-horizon tasks that dominate timeouts; easy tasks sit far lower.
+- **Context for the decision:** `error_tool_call_count` is *execution*
+  errors (historical norm ~18.3% of calls) — all four arms sit at
+  17.9–19.6%, i.e. AT the historical norm, arm-independent. These are NOT
+  parse errors. The parse-specific signals stayed where #010 put them:
+  leak detection is wire-level in the probe battery (every
+  probe/install/wizard-51 seat since T4 has been 6/6 parsed, 0 leaks), and
+  unmapped remains sidecar-only (the 2026-06-10 record was 0 unmapped over
+  13,569 calls).
+- Truncated counts (27–32/arm) track censored/timeout runs, as designed.
+
+**Decision: PENDING — lab owner (HITL).** The data shape matches the
+issue's "parse errors ≈ 0" branch (no run-time gate needed; keep the
+counters as a monitored invariant; close), but per the issue type that
+call is legislated by the lab owner, not the orchestrator.

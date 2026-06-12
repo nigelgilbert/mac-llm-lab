@@ -145,5 +145,66 @@ from the committed sidecar-port registry — exactly the verdict table's 32),
 resident lock held with `OC_ROTATE_HOLDING_LOCK=1`; resident :11436
 read-only; :11437 lifecycle owned by the driver. Expected ~20 h.
 retried_cells per arm to be appended to the ledger above when the sweep
-lands. Post-sweep (next session): analysis per prereg §5, verdict memo +
+lands.
+
+Interim (2026-06-11 ~23:00 local, sweep ~8 h in, 353/1024 rows): arm
+`opencode-a+git` COMPLETE at 254/256 rows, `retried_cells=2` — both
+retries were on `adversarial-input` reps and BOTH retry attempts
+double-flaked (instant sub-ms seed-phase death again), exceeding the #019
+single-retry budget → 2 rows short (adversarial-input 6/8). Same
+double-flake shape as the t16 re-base. The end-of-sweep #003 audit will
+name both cells and redden the sweep (expected, correct); recovery plan =
+REUSE_ROWS top-up of the 2 missing reps before analysis, per the re-base
+precedent. Arm `opencode-a+prompt` in progress (~99 rows at the time of
+the check).
+
+## T11 sweep — landed 2026-06-12 (~21.5 h)
+
+Main sweep 2026-06-11T20:06:01Z → 2026-06-12T17:33:45Z, exit rc=1 (arm
+rcs from failing cells — tolerated by design — and the audit naming the 2
+predicted missing control cells; all 3 pairing gates PASS, overflow pass
+clean). 1022/1024 rows; top-up #1 (~5 min after sweep end) double-flaked
+4/4 on an idle lab; top-up #2 after a 2-min explicit settle ran clean 2/2
+→ **1024/1024**, audit `missing: 0`. New #019 soak finding: the OrbStack
+share stays degraded for a WINDOW after sustained load — immediate
+retries are futile, settled retries succeed. If the burst shape recurs,
+candidate amendment: retry budget 2 with a short settle between attempts.
+
+## T12 — analysis + verdict (2026-06-12)
+
+Frozen prereg §5 applied mechanically:
+
+- **C1 (full − none) = +0.1pp, 90% CI [−3.4, +3.9] → G1 FAILED.** The
+  +6.6pp prompt effect did NOT replicate on commit `927b7d0` under
+  symmetric overflow semantics. Ablation STOPS per §5.2; C2/C3/C4
+  descriptive only: C2 (h1) −0.5pp [−3.9, +2.7]; C3 (h2) −3.9pp
+  [−7.7, −0.6] (h2-harm = screen-tier flag only); C4 sum −4.4 vs +0.1.
+- Control arm rose to 85.7% mean per-task pass (vs ≈76.2% in the
+  2026-06-10 sidecar sweep) — the baseline shift absorbed the prompt's
+  headroom; ~21/32 tasks at mutual ceiling. Candidate causes named (not
+  adjudicated) in the verdict §3; diagnosis = next prereg candidate.
+- Wall-clock rider: full prompt 1.67× control median at zero pass gain;
+  halves ≈0.93–0.94×.
+- Attrition 33/1024 (3.2%): 31 × `post_script_spawn_failed` (#024 class,
+  balanced 9/6/6/10 — NEW at scale, share-degradation family suspected,
+  follow-up if it recurs) + 2 × `context_overflow` (h1, #002 working).
+- Verdict memo: `host/test/docs/OPENCODE-PROMPT-HALVES-VERDICT.md`;
+  canonical registry committed at
+  `host/test/docs/data/run_registry.prompt-halves-20260611.jsonl`
+  (README updated; CIs re-derive verbatim, seeded).
+- **#018 tally produced** → recorded in issue #018 (per-arm + per-task
+  tables; error rate 17.9–19.6% = historical execution-error norm; zero
+  null-telemetry rows; probe battery record 0 leaks). **Decision PENDING
+  — lab owner (HITL). Orchestrator STOPS here per the tranche brief.**
+
+retried_cells ledger additions:
+
+| Sweep | Arm | retried_cells | Note |
+|-------|-----|---------------|------|
+| prompt-halves main | opencode-a+git | 2 | both retries double-flaked → 2 cells lost (recovered by top-up #2) |
+| prompt-halves main | opencode-a+prompt | 0 | |
+| prompt-halves main | opencode-a+prompt-h1 | 0 | |
+| prompt-halves main | opencode-a+prompt-h2 | 0 | |
+| prompt-halves top-up #1 | opencode-a+git | 1 | retry also flaked; 0 rows (ran ~5 min post-sweep, share still degraded) |
+| prompt-halves top-up #2 | opencode-a+git | 0 | clean 2/2 after 2-min settle | Post-sweep (next session): analysis per prereg §5, verdict memo +
 committed canonical registry, then the **#018 tally → STOP (HITL)**.
