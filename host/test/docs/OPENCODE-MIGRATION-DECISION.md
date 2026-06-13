@@ -160,8 +160,12 @@ markdown. Nothing irreplaceable remains.
   leaks; seats: `probe`, `install`, wizard step 51), and registry rows now
   carry `tool_call_count` / `error_tool_call_count` /
   `truncated_tool_call_count` promoted from the run_summary sidecar
-  (nullable, telemetry only — NO threshold, NO exclusion rule; threshold
-  review deferred to issue #018).
+  (nullable, telemetry only — NO threshold, NO exclusion rule). The
+  threshold review (former issue #018) **closed no-gate 2026-06-12**: the
+  first N≥8 sweep (1024 rows, prompt-halves) showed zero parse-level
+  failures (0 naked-XML leaks across every probe battery, 0 `unmapped`
+  over the record), so the counters stay observational and never feed
+  eligibility. Issue removed; tally + decision in git history.
 - Token accounting: registry carries no token fields (#021/#022 partial).
 - Tier-16/-32 remain **capability proxies** on 64 GB silicon, not
   memory-tier tests; thinking-off both arms; split provenance — caveats
